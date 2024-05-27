@@ -23,13 +23,28 @@ func main() {
 		os.Exit(1)
 	}
 
-	buf := make([]byte, 128)
-	_, err = c.Read(buf)
+	defer c.Close()
+
+	err = run(c)
 	if err != nil {
-		fmt.Println("read command: ", err.Error())
+		fmt.Println("run failed: ", err.Error())
 		os.Exit(1)
 	}
+}
+
+func run(c net.Conn) error {
+	buf := make([]byte, 128)
+	_, err := c.Read(buf)
+	if err != nil {
+		return fmt.Errorf("read cmd failed: %v", err)
+	}
+
 	log.Printf("read command:\n%s", buf)
 
-	c.Write([]byte("+PONG\r\n"))
+	_, err = c.Write([]byte("+PONG\r\n"))
+	if err != nil {
+		return fmt.Errorf("write response failed: %v", err)
+	}
+
+	return nil
 }
