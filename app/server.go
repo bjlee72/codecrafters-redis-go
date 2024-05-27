@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"log"
 	"net"
@@ -23,25 +24,50 @@ func main() {
 		os.Exit(1)
 	}
 
-	defer c.Close()
-
-	err = run(c)
+	err = commandLoop(c)
 	if err != nil {
 		fmt.Println("run failed: ", err.Error())
 		os.Exit(1)
 	}
 }
 
-func run(c net.Conn) error {
-	buf := make([]byte, 128)
-	_, err := c.Read(buf)
-	if err != nil {
-		return fmt.Errorf("read cmd failed: %v", err)
+func commandLoop(c net.Conn) error {
+	defer c.Close()
+
+	reader := bufio.NewReader(c)
+	var taken string
+	for {
+		bytes, isPrefix, err := reader.ReadLine()
+		if err != nil {
+			return fmt.Errorf("reader.Readline: %v", err)
+		}
+		taken += string(bytes)
+		if !isPrefix {
+			err := handleCommand(taken, c)
+			if err != nil {
+				return fmt.Errorf("handleCommand: %v", err)
+			}
+
+			taken = ""
+		}
 	}
+}
 
-	log.Printf("read command:\n%s", buf)
+func handleCommand(cmd string, c net.Conn) error {
+	log.Printf("read command: '%s'\n", cmd)
 
-	_, err = c.Write([]byte("+PONG\r\n"))
+	if cmd == "PING" {
+		err := handlePing(c)
+		if err != nil {
+			return fmt.Errorf("handlePing: %v", err)
+		}
+		return nil
+	}
+	return nil
+}
+
+func handlePing(c net.Conn) error {
+	_, err := c.Write([]byte("+PONG\r\n"))
 	if err != nil {
 		return fmt.Errorf("write response failed: %v", err)
 	}
