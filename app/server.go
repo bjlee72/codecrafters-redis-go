@@ -18,16 +18,15 @@ func main() {
 		os.Exit(1)
 	}
 
-	c, err := l.Accept()
-	if err != nil {
-		fmt.Println("Error accepting connection: ", err.Error())
-		os.Exit(1)
-	}
+	for {
+		c, err := l.Accept()
+		if err != nil {
+			fmt.Println("Error accepting connection: ", err.Error())
+			os.Exit(1)
+		}
 
-	err = commandLoop(c)
-	if err != nil {
-		fmt.Println("run failed: ", err.Error())
-		os.Exit(1)
+		// fork goroutine
+		go commandLoop(c)
 	}
 }
 
