@@ -1,11 +1,10 @@
 package main
 
 import (
-	"bufio"
 	"fmt"
-	"log"
 	"net"
 	"os"
+	"strings"
 )
 
 func main() {
@@ -25,48 +24,96 @@ func main() {
 			os.Exit(1)
 		}
 
+		conn := NewConnection(c)
+
 		// fork goroutine
-		go commandLoop(c)
+		go requestHandlingLoop(conn)
 	}
 }
 
-func commandLoop(c net.Conn) error {
-	defer c.Close()
+func requestHandlingLoop(conn *Connection) {
+	defer conn.Close()
 
-	reader := bufio.NewReader(c)
-	var taken string
 	for {
-		bytes, isPrefix, err := reader.ReadLine()
+		token, err := conn.GetToken()
 		if err != nil {
-			return fmt.Errorf("reader.Readline: %v", err)
+			fmt.Fprintf(os.Stderr, "conn.GetToken(): %v", err)
+			return
 		}
-		taken += string(bytes)
-		if !isPrefix {
-			err := handleCommand(taken, c)
+
+		num, err := ValidateArray(token)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "ValidateArray(): %v", err)
+			return
+		}
+
+		requestArray := make([]string, 0, num)
+		for i := 0; i < num; i++ {
+			token, err := conn.GetToken()
 			if err != nil {
-				return fmt.Errorf("handleCommand: %v", err)
+				fmt.Fprintf(os.Stderr, "conn.GetToken(): %v", err)
+				return
 			}
 
-			taken = ""
+			l, err := ValidateBulkString(token)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "ValidateString(): %v", err)
+				return
+			}
+
+			str, err := conn.GetToken()
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "conn.GetToken(): %v", err)
+				return
+			}
+			if l != len(str) {
+				fmt.Fprintf(os.Stderr, "bulk string length mismatch: %v != %v", l, len(str))
+				return
+			}
+
+			requestArray = append(requestArray, str)
+		}
+
+		// requestArray is a single request from a client.
+		if err := handleRequest(conn, requestArray); err != nil {
+			fmt.Fprintf(os.Stderr, "handleRequest failed: %v", err)
+			return
 		}
 	}
 }
 
-func handleCommand(cmd string, c net.Conn) error {
-	log.Printf("read command: '%s'\n", cmd)
+func handleRequest(conn *Connection, requestArray []string) error {
+	cmd := requestArray[0]
 
-	if cmd == "PING" {
-		err := handlePing(c)
+	if strings.EqualFold(cmd, "PING") {
+		err := handlePing(conn)
 		if err != nil {
 			return fmt.Errorf("handlePing: %v", err)
+		}
+		return nil
+	} else if strings.EqualFold(cmd, "ECHO") {
+		err := handleEcho(conn, requestArray[1])
+		if err != nil {
+			return fmt.Errorf("handleEcho: %v", err)
 		}
 		return nil
 	}
 	return nil
 }
 
-func handlePing(c net.Conn) error {
-	_, err := c.Write([]byte("+PONG\r\n"))
+func handlePing(conn *Connection) error {
+	_, err := conn.Write([]byte("+PONG\r\n"))
+	if err != nil {
+		return fmt.Errorf("write response failed: %v", err)
+	}
+
+	return nil
+}
+
+func handleEcho(conn *Connection, val string) error {
+	ret := fmt.Sprintf("$%v\r\n%v\r\n", len(val), val)
+
+	_, err := conn.Write([]byte(ret))
 	if err != nil {
 		return fmt.Errorf("write response failed: %v", err)
 	}
