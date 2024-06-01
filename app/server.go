@@ -4,14 +4,10 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"strconv"
 	"strings"
+	"time"
 )
-
-var cache map[string]string
-
-func init() {
-	cache = make(map[string]string)
-}
 
 func main() {
 	// You can use print statements as follows for debugging, they'll be visible when running tests.
@@ -89,29 +85,40 @@ func requestHandlingLoop(conn *Connection) {
 }
 
 func handleRequest(conn *Connection, requestArray []string) error {
-	cmd := strings.ToLower(requestArray[0])
+	cmd := strings.ToUpper(requestArray[0])
 
 	switch cmd {
 
-	case "ping":
+	case "PING":
 		err := handlePing(conn)
 		if err != nil {
 			return fmt.Errorf("handlePing: %v", err)
 		}
 
-	case "echo":
+	case "ECHO":
 		err := handleEcho(conn, requestArray[1])
 		if err != nil {
 			return fmt.Errorf("handleEcho: %v", err)
 		}
 
-	case "set":
-		err := handleSet(conn, requestArray[1], requestArray[2])
+	case "SET":
+		options := map[string][]string{}
+		var err error
+		if len(requestArray) > 3 {
+			options, err = buildOptions(
+				requestArray[3:],
+				optionConfig{"EX": 1, "PX": 1, "EXAT": 1, "PXAT": 1, "NX": 0, "XX": 0, "KEEPTTL": 0, "GET": 0},
+			)
+			if err != nil {
+				return fmt.Errorf("buildOptions for set operation: %v", err)
+			}
+		}
+		err = handleSet(conn, requestArray[1], requestArray[2], options)
 		if err != nil {
 			return fmt.Errorf("handleSet: %v", err)
 		}
 
-	case "get":
+	case "GET":
 		err := handleGet(conn, requestArray[1])
 		if err != nil {
 			return fmt.Errorf("handleGet: %v", err)
@@ -141,8 +148,22 @@ func handleEcho(conn *Connection, val string) error {
 	return nil
 }
 
-func handleSet(conn *Connection, key string, val string) error {
-	cache[key] = val
+func handleSet(conn *Connection, key string, val string, options map[string][]string) error {
+	now := time.Now().UnixMilli()
+
+	entry := entry{
+		value:    val,
+		expireAt: 0,
+	}
+	if ex, ok := options["PX"]; ok {
+		millisec, err := strconv.ParseInt(ex[0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("the given PX option value cannot be converted into int64: %v", err)
+		}
+		entry.expireAt = now + millisec
+
+	}
+	cache[key] = entry
 
 	_, err := conn.Write([]byte("+OK\r\n"))
 	if err != nil {
@@ -154,8 +175,10 @@ func handleSet(conn *Connection, key string, val string) error {
 
 func handleGet(conn *Connection, key string) error {
 	ret := "$-1\r\n"
-	if val, ok := cache[key]; ok {
-		ret = fmt.Sprintf("$%v\r\n%v\r\n", len(val), val)
+	if entry, ok := cache[key]; ok {
+		if entry.expireAt == 0 || entry.expireAt >= time.Now().UnixMilli() {
+			ret = fmt.Sprintf("$%v\r\n%v\r\n", len(entry.value), entry.value)
+		}
 	}
 
 	_, err := conn.Write([]byte(ret))
