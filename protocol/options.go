@@ -1,13 +1,13 @@
-package main
+package protocol
 
 import (
 	"fmt"
 	"strings"
 )
 
-type optionConfig map[string]int
+type OptionConfig map[string]int
 
-func buildOptions(requestArray []string, cfg optionConfig) (map[string][]string, error) {
+func BuildOptions(requestArray []string, cfg OptionConfig) (map[string][]string, error) {
 	ret := make(map[string][]string)
 	idx := 0
 	for idx < len(requestArray) {
