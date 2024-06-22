@@ -6,18 +6,25 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/codecrafters-io/redis-starter-go/info"
 	"github.com/codecrafters-io/redis-starter-go/storage"
 )
 
 type Handler struct {
 	conn  *Connection
 	cache *storage.Cache
+	info  info.Info
 }
 
 func NewHandler(conn *Connection, cache *storage.Cache) *Handler {
 	return &Handler{
 		conn:  conn,
 		cache: cache,
+		info: info.Info{
+			Replication: info.Replication{
+				Role: "master",
+			},
+		},
 	}
 }
 
@@ -89,6 +96,12 @@ func (h *Handler) processRequest(requestArray []string) error {
 		err := h.handleEcho(requestArray[1])
 		if err != nil {
 			return fmt.Errorf("handleEcho: %v", err)
+		}
+
+	case "INFO":
+		err := h.handleInfo(requestArray[1:])
+		if err != nil {
+			return fmt.Errorf("handleInfo: %v", err)
 		}
 
 	case "SET":
@@ -165,6 +178,21 @@ func (h *Handler) handleGet(key string) error {
 
 	if entry, err := h.cache.Get(key); entry != nil && err == nil {
 		ret = fmt.Sprintf("$%v\r\n%v\r\n", len(*entry), *entry)
+	}
+
+	_, err := h.conn.Write(ret)
+	if err != nil {
+		return fmt.Errorf("write response failed: %v", err)
+	}
+
+	return nil
+}
+
+func (h *Handler) handleInfo(_ []string) error {
+	ret := "$-1\r\n"
+
+	if str, err := h.info.ToRedisBulkString(); err == nil {
+		ret = str
 	}
 
 	_, err := h.conn.Write(ret)
