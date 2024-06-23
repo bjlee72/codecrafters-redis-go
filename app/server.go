@@ -5,22 +5,25 @@ import (
 	"net"
 	"os"
 
+	"github.com/codecrafters-io/redis-starter-go/config"
 	"github.com/codecrafters-io/redis-starter-go/protocol"
 	"github.com/codecrafters-io/redis-starter-go/storage"
 	"github.com/jessevdk/go-flags"
 )
 
 func main() {
-	var opts struct {
-		// Slice of bool will append 'true' each time the option
-		// is encountered (can be set multiple times, like -vvv)
-		Port int `short:"p" long:"port" default:"6379" description:"Port number to start the process"`
-	}
+	var opts config.Opts
 
 	_, err := flags.Parse(&opts)
 	if err != nil {
 		// We failed to parse the input parameter.
 		panic(err)
+	}
+
+	err = opts.Validate()
+	if err != nil {
+		fmt.Println(err.Error())
+		os.Exit(1)
 	}
 
 	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%v", opts.Port))
@@ -37,6 +40,7 @@ func main() {
 		}
 
 		handler := protocol.NewHandler(
+			&opts,
 			protocol.NewConnection(c),
 			storage.GetCache())
 

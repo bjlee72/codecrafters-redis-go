@@ -7,23 +7,17 @@ import (
 )
 
 func (info Info) ToRedisBulkString() (string, error) {
-	typ := reflect.TypeOf(info)
 	val := reflect.ValueOf(info)
 	res := make([]string, 0)
 
-	for i := 0; i < typ.NumField(); i++ {
-		section := typ.Field(i)
+	for i := 0; i < val.Type().NumField(); i++ {
+		section := val.Type().Field(i)
 		if key := section.Tag.Get("status_section"); key != "" {
 			res = append(res, fmt.Sprintf("# %s", section.Name))
 
-			var (
-				sectionType  = section.Type
-				sectionValue = val.Field(i)
-			)
-
-			fstr, err := toRedisBulkString(sectionType, sectionValue)
+			fstr, err := toRedisBulkString(val.Field(i))
 			if err != nil {
-				return "", fmt.Errorf("cannot redis-marshall section %v", section.Name)
+				return "", fmt.Errorf("toRedisBulkString failed: %v", err)
 			}
 
 			res = append(res, fstr)
@@ -34,13 +28,13 @@ func (info Info) ToRedisBulkString() (string, error) {
 	return fmt.Sprintf("$%v\r\n%v\r\n", len(joined), joined), nil
 }
 
-func toRedisBulkString(sectionType reflect.Type, sectionValue reflect.Value) (string, error) {
+func toRedisBulkString(section reflect.Value) (string, error) {
 	res := make([]string, 0)
 
-	for i := 0; i < sectionType.NumField(); i++ {
-		fld := sectionType.Field(i)
+	for i := 0; i < section.Type().NumField(); i++ {
+		fld := section.Type().Field(i)
 		if key := fld.Tag.Get("status_field"); key != "" {
-			raw := sectionValue.Field(i)
+			raw := section.Field(i)
 			if raw.Kind() == reflect.String {
 				res = append(res, fmt.Sprintf("%v:%v", key, raw.String()))
 			}

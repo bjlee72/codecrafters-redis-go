@@ -6,23 +6,26 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/codecrafters-io/redis-starter-go/config"
 	"github.com/codecrafters-io/redis-starter-go/info"
 	"github.com/codecrafters-io/redis-starter-go/storage"
 )
 
 type Handler struct {
+	opts  *config.Opts
 	conn  *Connection
 	cache *storage.Cache
 	info  info.Info
 }
 
-func NewHandler(conn *Connection, cache *storage.Cache) *Handler {
+func NewHandler(opts *config.Opts, conn *Connection, cache *storage.Cache) *Handler {
 	return &Handler{
+		opts:  opts,
 		conn:  conn,
 		cache: cache,
 		info: info.Info{
 			Replication: info.Replication{
-				Role: "master",
+				Role: opts.Role,
 			},
 		},
 	}
