@@ -5,7 +5,18 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 )
+
+func TestOpts_Master_Validate(t *testing.T) {
+	var o Opts
+	err := o.Validate()
+	require.NoError(t, err)
+
+	assert.Equal(t, o.Role, "master")
+	assert.NotNil(t, o.ReplicationID)
+	assert.Len(t, o.ReplicationID, 40)
+}
 
 func TestOpts_ReplicaOf_Validate(t *testing.T) {
 	type fields struct {

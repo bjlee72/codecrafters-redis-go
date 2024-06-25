@@ -21,7 +21,7 @@ func TestInfo_ToRedisBulkString(t *testing.T) {
 					},
 				},
 			},
-			want: "$26\r\n# Replication\r\nrole:master\r\n",
+			want: "$64\r\n# Replication\r\nrole:master\r\nmaster_replid:\r\nmaster_repl_offset:0\r\n",
 		},
 	}
 	for _, tt := range tests {

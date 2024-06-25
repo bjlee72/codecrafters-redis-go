@@ -5,10 +5,13 @@ import (
 	"net"
 	"regexp"
 	"strconv"
+
+	"github.com/mazen160/go-random"
 )
 
 var (
-	whitespace = regexp.MustCompile("[\t ]+")
+	whitespace                = regexp.MustCompile("[\t ]+")
+	replicationIdCharacterSet = "abcdefghijklmnopqrstuvwxyz0123456789"
 )
 
 // Opts represets the config given by users.
@@ -18,14 +21,26 @@ type Opts struct {
 
 	// The below are the read-only opts induced by the user-given config values.
 
-	Role       string
-	MasterIP   net.IP
-	MasterPort int
+	Role              string
+	MasterIP          net.IP
+	MasterPort        int
+	ReplicationID     string
+	ReplicationOffset int
 }
 
 func (o *Opts) Validate() error {
+
+	//
 	// Validate ReplicatOf
+	//
+
 	o.Role = "master" // default
+	rid, err := random.Random(40, replicationIdCharacterSet, true)
+	if err != nil {
+		return fmt.Errorf("random.Random failed: %v", err)
+	}
+	o.ReplicationID = rid
+
 	if o.ReplicaOf != "" {
 		tokens := whitespace.Split(o.ReplicaOf, -1)
 		if len(tokens) != 2 {
@@ -45,6 +60,8 @@ func (o *Opts) Validate() error {
 		}
 		o.MasterPort = port
 		o.Role = "slave"
+
+		o.ReplicationID = ""
 	}
 	return nil
 }

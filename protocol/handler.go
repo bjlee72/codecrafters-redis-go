@@ -25,7 +25,9 @@ func NewHandler(opts *config.Opts, conn *Connection, cache *storage.Cache) *Hand
 		cache: cache,
 		info: info.Info{
 			Replication: info.Replication{
-				Role: opts.Role,
+				Role:             opts.Role,
+				MasterReplID:     opts.ReplicationID,
+				MasterReplOffset: opts.ReplicationOffset,
 			},
 		},
 	}
@@ -135,7 +137,7 @@ func (h *Handler) processRequest(requestArray []string) error {
 }
 
 func (h *Handler) handlePing() error {
-	_, err := h.conn.Write("+PONG\r\n")
+	err := h.conn.Write("+PONG\r\n")
 	if err != nil {
 		return fmt.Errorf("write response failed: %v", err)
 	}
@@ -146,7 +148,7 @@ func (h *Handler) handlePing() error {
 func (h *Handler) handleEcho(val string) error {
 	ret := fmt.Sprintf("$%v\r\n%v\r\n", len(val), val)
 
-	_, err := h.conn.Write(ret)
+	err := h.conn.Write(ret)
 	if err != nil {
 		return fmt.Errorf("write response failed: %v", err)
 	}
@@ -155,20 +157,19 @@ func (h *Handler) handleEcho(val string) error {
 }
 
 func (h *Handler) handleSet(key, val string, options map[string][]string) error {
-	var expireAfter uint64
+	var expireAfter int64
 
 	if ex, ok := options["PX"]; ok {
-		millisec, err := strconv.ParseUint(ex[0], 10, 64)
+		millisec, err := strconv.ParseInt(ex[0], 10, 64)
 		if err != nil {
 			return fmt.Errorf("the given PX option value cannot be converted into int64: %v", err)
 		}
 		expireAfter = millisec
-
 	}
 
-	h.cache.Set(key, val, uint64(expireAfter))
+	h.cache.Set(key, val, expireAfter)
 
-	_, err := h.conn.Write("+OK\r\n")
+	err := h.conn.Write("+OK\r\n")
 	if err != nil {
 		return fmt.Errorf("write response failed: %v", err)
 	}
@@ -183,7 +184,7 @@ func (h *Handler) handleGet(key string) error {
 		ret = fmt.Sprintf("$%v\r\n%v\r\n", len(*entry), *entry)
 	}
 
-	_, err := h.conn.Write(ret)
+	err := h.conn.Write(ret)
 	if err != nil {
 		return fmt.Errorf("write response failed: %v", err)
 	}
@@ -198,7 +199,7 @@ func (h *Handler) handleInfo(_ []string) error {
 		ret = str
 	}
 
-	_, err := h.conn.Write(ret)
+	err := h.conn.Write(ret)
 	if err != nil {
 		return fmt.Errorf("write response failed: %v", err)
 	}

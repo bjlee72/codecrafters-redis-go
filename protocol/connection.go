@@ -44,11 +44,19 @@ func (c *Connection) Read() (string, error) {
 }
 
 // WriteBytes is a low-level write operation on the connection.
-func (c *Connection) WriteBytes(bytes []byte) (int, error) {
-	return c.conn.Write(bytes)
+func (c *Connection) WriteBytes(bytes []byte) error {
+	var written int
+	for written < len(bytes) {
+		n, err := c.conn.Write(bytes)
+		if err != nil {
+			return fmt.Errorf("c.conn.Write failed: %v", err)
+		}
+		written += n
+	}
+	return nil
 }
 
 // Write is a low-level write operation on the connection
-func (c *Connection) Write(str string) (int, error) {
+func (c *Connection) Write(str string) error {
 	return c.WriteBytes([]byte(str))
 }

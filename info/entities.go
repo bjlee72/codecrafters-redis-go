@@ -1,9 +1,11 @@
 package info
 
 type Info struct {
-	Replication Replication `status_section:"replication"`
+	Replication Replication
 }
 
 type Replication struct {
-	Role string `status_field:"role"`
+	Role             string
+	MasterReplID     string
+	MasterReplOffset int
 }
