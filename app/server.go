@@ -26,6 +26,34 @@ func main() {
 		os.Exit(1)
 	}
 
+	if opts.Role == "slave" {
+		err := handshake(opts)
+		if err != nil {
+			fmt.Println("handshake with master failed: ", err.Error())
+			os.Exit(1)
+		}
+	}
+
+	runServer(opts)
+}
+
+func handshake(opts config.Opts) error {
+	ip, port := opts.MasterIP, opts.MasterPort
+
+	c, err := net.Dial("tcp", fmt.Sprintf("%s:%d", ip, port))
+	if err != nil {
+		return fmt.Errorf("net.Dial failed: %v", err)
+	}
+
+	conn := protocol.NewConnection(c)
+	err = conn.Write("*1\r\n$4\r\nPING\r\n")
+	if err != nil {
+		return fmt.Errorf("conn.Write failed: %v", err)
+	}
+	return nil
+}
+
+func runServer(opts config.Opts) {
 	l, err := net.Listen("tcp", fmt.Sprintf("0.0.0.0:%v", opts.Port))
 	if err != nil {
 		fmt.Println("Failed to bind to port 6379")
@@ -44,7 +72,6 @@ func main() {
 			protocol.NewConnection(c),
 			storage.GetCache())
 
-		// fork goroutine
 		go handler.Handle()
 	}
 }

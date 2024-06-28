@@ -1,6 +1,7 @@
 package config
 
 import (
+	"context"
 	"fmt"
 	"net"
 	"regexp"
@@ -48,10 +49,11 @@ func (o *Opts) Validate() error {
 		}
 
 		// With LookupIP, you can handle strings line 'localhost' as well.
-		ip, err := net.LookupIP(tokens[0])
+		ip, err := net.DefaultResolver.LookupIP(context.Background(), "ip4", tokens[0])
 		if err != nil {
 			return fmt.Errorf("not the valid IP address format: %s", tokens[0])
 		}
+		fmt.Println(ip)
 		o.MasterIP = ip[0]
 
 		port, err := strconv.Atoi(tokens[1])
