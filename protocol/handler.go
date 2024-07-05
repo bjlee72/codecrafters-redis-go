@@ -216,6 +216,12 @@ func (h *Handler) processRequest(requestArray []string) error {
 		if err != nil {
 			return fmt.Errorf("handleReplConf: %v", err)
 		}
+
+	case "PSYNC":
+		err := h.handlePsync(requestArray[1], requestArray[2])
+		if err != nil {
+			return fmt.Errorf("handleReplConf: %v", err)
+		}
 	}
 
 	return nil
@@ -294,6 +300,18 @@ func (h *Handler) handleInfo(_ []string) error {
 
 func (h *Handler) handleReplConf(_ []string) error {
 	ret := "+OK\r\n"
+
+	err := h.conn.Write(ret)
+	if err != nil {
+		return fmt.Errorf("write response failed: %v", err)
+	}
+
+	return nil
+}
+
+func (h *Handler) handlePsync(id, offset string) error {
+	// replication id and offset is not used for now.
+	ret := fmt.Sprintf("+FULLRESYNC %s %d\r\n", h.opts.ReplicationID, h.opts.ReplicationOffset)
 
 	err := h.conn.Write(ret)
 	if err != nil {
