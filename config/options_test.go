@@ -34,12 +34,12 @@ func TestOpts_ReplicaOf_Validate(t *testing.T) {
 		{
 			name: "replicaof test",
 			fields: fields{
-				ReplicaOf: "127.0.0.1 8080",
+				ReplicaOf: "127.0.0.2 8080",
 			},
 			want: fields{
-				ReplicaOf:  "127.0.0.1 8080",
+				ReplicaOf:  "127.0.0.2 8080",
 				Role:       "slave",
-				MasterIP:   net.ParseIP("127.0.0.1"),
+				MasterIP:   net.ParseIP("127.0.0.2"),
 				MasterPort: 8080,
 			},
 			wantErr: false,

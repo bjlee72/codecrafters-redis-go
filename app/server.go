@@ -27,7 +27,7 @@ func main() {
 	}
 
 	if opts.Role == "slave" {
-		err := handshake(opts)
+		err := connectMaster(opts)
 		if err != nil {
 			fmt.Println("handshake with master failed: ", err.Error())
 			os.Exit(1)
@@ -37,7 +37,7 @@ func main() {
 	runServer(opts)
 }
 
-func handshake(opts config.Opts) error {
+func connectMaster(opts config.Opts) error {
 	ip, port := opts.MasterIP, opts.MasterPort
 
 	c, err := net.Dial("tcp", fmt.Sprintf("%s:%d", ip, port))
@@ -45,12 +45,13 @@ func handshake(opts config.Opts) error {
 		return fmt.Errorf("net.Dial failed: %v", err)
 	}
 
-	conn := protocol.NewConnection(c)
-	err = conn.Write("*1\r\n$4\r\nPING\r\n")
-	if err != nil {
-		return fmt.Errorf("conn.Write failed: %v", err)
-	}
-	return nil
+	handler := protocol.NewHandler(
+		&opts,
+		protocol.NewConnection(c),
+		storage.GetCache(),
+	)
+
+	return handler.Sync()
 }
 
 func runServer(opts config.Opts) {

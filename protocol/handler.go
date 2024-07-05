@@ -33,57 +33,114 @@ func NewHandler(opts *config.Opts, conn *Connection, cache *storage.Cache) *Hand
 	}
 }
 
+// Sync syncs the status of cache with master.
+func (h *Handler) Sync() error {
+	defer h.conn.Close()
+
+	/*
+	 * Handshake process.
+	 */
+
+	if err := h.conn.Write("*1\r\n$4\r\nPING\r\n"); err != nil {
+		return fmt.Errorf("conn.Write failed: %v", err)
+	}
+
+	if _, err := h.shouldRead("PONG"); err != nil {
+		return fmt.Errorf("conn.Write failed: %v", err)
+	}
+
+	portStr := strconv.Itoa(h.opts.Port)
+	if err := h.conn.Write(fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$%d\r\n%s\r\n", len(portStr), portStr)); err != nil {
+		return fmt.Errorf("conn.Write failed: %v", err)
+	}
+
+	if _, err := h.shouldRead("OK"); err != nil {
+		return fmt.Errorf("conn.Write failed: %v", err)
+	}
+
+	if err := h.conn.Write("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"); err != nil {
+		return fmt.Errorf("conn.Write failed: %v", err)
+	}
+
+	if _, err := h.shouldRead("OK"); err != nil {
+		return fmt.Errorf("conn.Write failed: %v", err)
+	}
+
+	return nil
+}
+
 func (h *Handler) Handle() {
 	defer h.conn.Close()
 
 	// read, validate, and process.
 
 	for {
-		token, err := h.conn.Read()
+		request, err := h.read()
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "conn.GetToken(): %v", err)
+			fmt.Fprintln(os.Stderr, err.Error())
 			return
-		}
-
-		num, err := ValidateArray(token)
-		if err != nil {
-			fmt.Fprintf(os.Stderr, "ValidateArray(): %v", err)
-			return
-		}
-
-		requestArray := make([]string, 0, num)
-		for i := 0; i < num; i++ {
-			token, err := h.conn.Read()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "h.conn.GetToken(): %v", err)
-				return
-			}
-
-			l, err := ValidateBulkString(token)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "ValidateString(): %v", err)
-				return
-			}
-
-			str, err := h.conn.Read()
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "h.conn.GetToken(): %v", err)
-				return
-			}
-			if l != len(str) {
-				fmt.Fprintf(os.Stderr, "bulk string length mismatch: %v != %v", l, len(str))
-				return
-			}
-
-			requestArray = append(requestArray, str)
 		}
 
 		// requestArray is a single request from a client.
-		if err := h.processRequest(requestArray); err != nil {
+		if err := h.processRequest(request); err != nil {
 			fmt.Fprintf(os.Stderr, "handleRequest failed: %v", err)
 			return
 		}
 	}
+}
+
+func (h *Handler) read() ([]string, error) {
+	token, err := h.conn.Read()
+	if err != nil {
+		return nil, fmt.Errorf("conn.Read(): %v", err)
+	}
+
+	if token[0] == '+' { // simple string
+		return []string{token[1:]}, nil
+	}
+
+	num, err := ValidateArray(token)
+	if err != nil {
+		return nil, fmt.Errorf("ValidateArray(): %v", err)
+	}
+
+	requestArray := make([]string, 0, num)
+	for i := 0; i < num; i++ {
+		token, err := h.conn.Read()
+		if err != nil {
+			return nil, fmt.Errorf("h.conn.GetToken(): %v", err)
+		}
+
+		l, err := ValidateBulkString(token)
+		if err != nil {
+			return nil, fmt.Errorf("ValidateString(): %v", err)
+		}
+
+		str, err := h.conn.Read()
+		if err != nil {
+			return nil, fmt.Errorf("h.conn.GetToken(): %v", err)
+		}
+		if l != len(str) {
+			return nil, fmt.Errorf("bulk string length mismatch: %v != %v", l, len(str))
+		}
+
+		requestArray = append(requestArray, str)
+	}
+
+	return requestArray, nil
+}
+
+func (h *Handler) shouldRead(cmd string) ([]string, error) {
+	msg, err := h.read()
+	if err != nil {
+		return nil, fmt.Errorf("h.read failed: %v", err)
+	}
+
+	if !strings.EqualFold(cmd, msg[0]) {
+		return nil, fmt.Errorf("cmd mismatch: expected: %s actual: %v", cmd, msg)
+	}
+
+	return msg, nil
 }
 
 func (h *Handler) processRequest(requestArray []string) error {
