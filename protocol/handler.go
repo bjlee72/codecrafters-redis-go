@@ -210,6 +210,12 @@ func (h *Handler) processRequest(requestArray []string) error {
 		if err != nil {
 			return fmt.Errorf("handleGet: %v", err)
 		}
+
+	case "REPLCONF":
+		err := h.handleReplConf(requestArray[1:])
+		if err != nil {
+			return fmt.Errorf("handleReplConf: %v", err)
+		}
 	}
 
 	return nil
@@ -277,6 +283,17 @@ func (h *Handler) handleInfo(_ []string) error {
 	if str, err := h.info.ToRedisBulkString(); err == nil {
 		ret = str
 	}
+
+	err := h.conn.Write(ret)
+	if err != nil {
+		return fmt.Errorf("write response failed: %v", err)
+	}
+
+	return nil
+}
+
+func (h *Handler) handleReplConf(_ []string) error {
+	ret := "+OK\r\n"
 
 	err := h.conn.Write(ret)
 	if err != nil {
