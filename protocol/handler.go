@@ -66,6 +66,14 @@ func (h *Handler) Sync() error {
 		return fmt.Errorf("conn.Write failed: %v", err)
 	}
 
+	if err := h.conn.Write("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"); err != nil {
+		return fmt.Errorf("conn.Write failed: %v", err)
+	}
+
+	if _, err := h.shouldReadPrefix("FULLRESYNC"); err != nil {
+		return fmt.Errorf("conn.Write failed: %v", err)
+	}
+
 	return nil
 }
 
@@ -137,6 +145,20 @@ func (h *Handler) shouldRead(cmd string) ([]string, error) {
 	}
 
 	if !strings.EqualFold(cmd, msg[0]) {
+		return nil, fmt.Errorf("cmd mismatch: expected: %s actual: %v", cmd, msg)
+	}
+
+	return msg, nil
+}
+
+func (h *Handler) shouldReadPrefix(cmd string) ([]string, error) {
+	msg, err := h.read()
+	if err != nil {
+		return nil, fmt.Errorf("h.read failed: %v", err)
+	}
+
+	prefix := msg[0][:len(cmd)]
+	if !strings.EqualFold(cmd, prefix) {
 		return nil, fmt.Errorf("cmd mismatch: expected: %s actual: %v", cmd, msg)
 	}
 
