@@ -1,6 +1,7 @@
 package protocol
 
 import (
+	"encoding/base64"
 	"fmt"
 	"os"
 	"strconv"
@@ -218,9 +219,14 @@ func (h *Handler) processRequest(requestArray []string) error {
 		}
 
 	case "PSYNC":
-		err := h.handlePsync(requestArray[1], requestArray[2])
+		offset, err := strconv.Atoi(requestArray[2])
 		if err != nil {
-			return fmt.Errorf("handleReplConf: %v", err)
+			return fmt.Errorf("strconv.Atoi: %v", err)
+		}
+
+		err = h.handlePsync(requestArray[1], offset)
+		if err != nil {
+			return fmt.Errorf("handlePsync: %v", err)
 		}
 	}
 
@@ -309,14 +315,51 @@ func (h *Handler) handleReplConf(_ []string) error {
 	return nil
 }
 
-func (h *Handler) handlePsync(id, offset string) error {
+func (h *Handler) handlePsync(id string, offset int) error {
 	// replication id and offset is not used for now.
-	ret := fmt.Sprintf("+FULLRESYNC %s %d\r\n", h.opts.ReplicationID, h.opts.ReplicationOffset)
-
-	err := h.conn.Write(ret)
-	if err != nil {
-		return fmt.Errorf("write response failed: %v", err)
+	if id != "?" && id != h.opts.ReplicationID {
+		return fmt.Errorf("client-sent rid is different from ours: client: %s, this: %s", id, h.opts.ReplicationID)
 	}
 
+	if id == "?" && offset > 0 {
+		return fmt.Errorf("wrong rsync request: id: %s, offset: %d", id, offset)
+	}
+
+	if offset == -1 { // FULLRESYNC
+		ret := fmt.Sprintf("+FULLRESYNC %s 0\r\n", h.opts.ReplicationID)
+		if err := h.conn.Write(ret); err != nil {
+			return fmt.Errorf("write response failed: %v", err)
+		}
+
+		rdb, err := h.readRDB(0)
+		if err != nil {
+			return fmt.Errorf("readRDB failed: %v", err)
+		}
+
+		ret = fmt.Sprintf("$%d\r\n%v", len(rdb), rdb)
+
+		if err := h.conn.Write(ret); err != nil {
+			return fmt.Errorf("write response failed: %v", err)
+		}
+	} else {
+		return fmt.Errorf("not implemented")
+	}
+
+	// send content of the RDB file.
+
 	return nil
+}
+
+// readRDB returns the base64-decoded RDB file.
+func (h *Handler) readRDB(offset int) (string, error) {
+	var (
+		b64 = `UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==`
+	)
+
+	decoded, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		return "", fmt.Errorf("base64.StdEncoding.DecodeString: %v", err)
+	}
+
+	return string(decoded), nil
 }
