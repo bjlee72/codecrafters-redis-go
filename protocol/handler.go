@@ -3,9 +3,11 @@ package protocol
 import (
 	"encoding/base64"
 	"fmt"
+	"io"
 	"os"
 	"strconv"
 	"strings"
+	"sync"
 
 	"github.com/codecrafters-io/redis-starter-go/config"
 	"github.com/codecrafters-io/redis-starter-go/info"
@@ -13,13 +15,15 @@ import (
 )
 
 type Handler struct {
-	opts  *config.Opts
-	conn  *Connection
-	cache *storage.Cache
-	info  info.Info
+	opts       *config.Opts
+	conn       *Connection
+	cache      *storage.Cache
+	info       info.Info
+	slaves     map[string]*Connection
+	slavesLock sync.Mutex
 }
 
-func NewHandler(opts *config.Opts, conn *Connection, cache *storage.Cache) *Handler {
+func NewHandler(conn *Connection, opts *config.Opts, cache *storage.Cache, slaves map[string]*Connection) *Handler {
 	return &Handler{
 		opts:  opts,
 		conn:  conn,
@@ -31,6 +35,8 @@ func NewHandler(opts *config.Opts, conn *Connection, cache *storage.Cache) *Hand
 				MasterReplOffset: opts.ReplicationOffset,
 			},
 		},
+		slaves:     slaves,
+		slavesLock: sync.Mutex{},
 	}
 }
 
@@ -41,7 +47,6 @@ func (h *Handler) Sync() error {
 	/*
 	 * Handshake process.
 	 */
-
 	if err := h.conn.Write("*1\r\n$4\r\nPING\r\n"); err != nil {
 		return fmt.Errorf("conn.Write failed: %v", err)
 	}
@@ -75,7 +80,24 @@ func (h *Handler) Sync() error {
 		return fmt.Errorf("conn.Write failed: %v", err)
 	}
 
-	return nil
+	if err := h.shouldReadRDB(); err != nil {
+		return fmt.Errorf("shouldReadRDB: %v", err)
+	}
+
+	/*
+	 * Loop to handle the incoming requests.
+	 */
+	for {
+		request, err := h.read()
+		if err != nil {
+			return fmt.Errorf("h.read: %v", err)
+		}
+
+		// requestArray is a single request from a client.
+		if err := h.processRequest(request); err != nil {
+			return fmt.Errorf("handleRequest failed: %v", err)
+		}
+	}
 }
 
 func (h *Handler) Handle() {
@@ -91,11 +113,28 @@ func (h *Handler) Handle() {
 		}
 
 		// requestArray is a single request from a client.
-		if err := h.processRequest(request); err != nil {
+		err = h.processRequest(request)
+		if err != nil {
 			fmt.Fprintf(os.Stderr, "handleRequest failed: %v", err)
 			return
 		}
 	}
+}
+
+func (h *Handler) Propagate(str string) error {
+	errors := make([]string, 0)
+	for _, conn := range h.slaves {
+		fmt.Println(str)
+		if err := conn.Write(str); err != nil {
+			errors = append(errors, fmt.Sprintf("conn.Write: %v", err))
+		}
+	}
+
+	if len(errors) > 0 {
+		return fmt.Errorf("Propagate failed: [%s]", strings.Join(errors, ", "))
+	}
+
+	return nil
 }
 
 func (h *Handler) read() ([]string, error) {
@@ -166,6 +205,47 @@ func (h *Handler) shouldReadPrefix(cmd string) ([]string, error) {
 	return msg, nil
 }
 
+func (h *Handler) shouldReadRDB() error {
+	typ, err := h.conn.Read()
+	if err != nil {
+		return fmt.Errorf("h.conn.Read: %v", err)
+	}
+
+	if typ[0] != '$' {
+		return fmt.Errorf("unexpected type than $: %v", typ[0])
+	}
+
+	total, err := strconv.Atoi(typ[1:])
+	if err != nil {
+		return fmt.Errorf("strconf.Atoi: %v", err)
+	}
+
+	for total > 0 {
+		buf := make([]byte, 0, total)
+		rd, err := h.conn.ReadBytes(buf)
+		if rd > 0 {
+			total = total - rd
+		}
+		if err != nil {
+			if err == io.EOF {
+				break
+			} else {
+				return fmt.Errorf("h.conn.ReadBytes: %v", err)
+			}
+		}
+
+		// TODO: copy buf to somewhere.
+	}
+
+	if total > 0 {
+		// incomplete termination.
+		return fmt.Errorf("couldn't read RDB fully")
+	}
+
+	return nil
+}
+
+// the first return arg is a flag for propagation to secondaries.
 func (h *Handler) processRequest(requestArray []string) error {
 	cmd := strings.ToUpper(requestArray[0])
 
@@ -201,9 +281,25 @@ func (h *Handler) processRequest(requestArray []string) error {
 				return fmt.Errorf("buildOptions for set operation: %v", err)
 			}
 		}
-		err = h.handleSet(requestArray[1], requestArray[2], options)
+
+		key, value := requestArray[1], requestArray[2]
+		err = h.handleSet(key, value, options)
 		if err != nil {
 			return fmt.Errorf("handleSet: %v", err)
+		}
+
+		fmt.Println(h.opts.Role)
+
+		// TODO: somewhere nicer
+		if h.opts.Role == "master" {
+			prop := fmt.Sprintf(
+				"*3\r\n$3\r\nSET\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n",
+				len(key), key, len(value), value,
+			)
+			err := h.Propagate(prop)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "h.Progagate: %v", err)
+			}
 		}
 
 	case "GET":
@@ -213,12 +309,20 @@ func (h *Handler) processRequest(requestArray []string) error {
 		}
 
 	case "REPLCONF":
+		if h.opts.Role != "master" {
+			return fmt.Errorf("role is not master: %s", h.opts.Role)
+		}
+
 		err := h.handleReplConf(requestArray[1:])
 		if err != nil {
 			return fmt.Errorf("handleReplConf: %v", err)
 		}
 
 	case "PSYNC":
+		if h.opts.Role != "master" {
+			return fmt.Errorf("role is not master: %s", h.opts.Role)
+		}
+
 		offset, err := strconv.Atoi(requestArray[2])
 		if err != nil {
 			return fmt.Errorf("strconv.Atoi: %v", err)
@@ -228,6 +332,12 @@ func (h *Handler) processRequest(requestArray []string) error {
 		if err != nil {
 			return fmt.Errorf("handlePsync: %v", err)
 		}
+
+		// register a new slave to update continuously.
+		h.slavesLock.Lock()
+		remoteAddr := h.conn.RemoteAddr().String()
+		h.slaves[remoteAddr] = h.conn
+		h.slavesLock.Unlock()
 	}
 
 	return nil
@@ -265,6 +375,10 @@ func (h *Handler) handleSet(key, val string, options map[string][]string) error 
 	}
 
 	h.cache.Set(key, val, expireAfter)
+
+	if h.opts.Role == "slave" {
+		return nil
+	}
 
 	err := h.conn.Write("+OK\r\n")
 	if err != nil {
@@ -331,13 +445,14 @@ func (h *Handler) handlePsync(id string, offset int) error {
 			return fmt.Errorf("write response failed: %v", err)
 		}
 
-		rdb, err := h.readRDB(0)
+		rdb, err := h.readRDB()
 		if err != nil {
 			return fmt.Errorf("readRDB failed: %v", err)
 		}
 
 		ret = fmt.Sprintf("$%d\r\n%v", len(rdb), rdb)
 
+		// send content of the RDB file.
 		if err := h.conn.Write(ret); err != nil {
 			return fmt.Errorf("write response failed: %v", err)
 		}
@@ -345,13 +460,11 @@ func (h *Handler) handlePsync(id string, offset int) error {
 		return fmt.Errorf("not implemented")
 	}
 
-	// send content of the RDB file.
-
 	return nil
 }
 
 // readRDB returns the base64-decoded RDB file.
-func (h *Handler) readRDB(offset int) (string, error) {
+func (h *Handler) readRDB() (string, error) {
 	var (
 		b64 = `UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==`
 	)

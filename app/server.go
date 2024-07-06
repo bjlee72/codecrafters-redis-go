@@ -2,6 +2,7 @@ package main
 
 import (
 	"fmt"
+	"log"
 	"net"
 	"os"
 
@@ -27,31 +28,30 @@ func main() {
 	}
 
 	if opts.Role == "slave" {
-		err := connectMaster(opts)
-		if err != nil {
-			fmt.Println("handshake with master failed: ", err.Error())
-			os.Exit(1)
-		}
+		go connectMaster(opts)
 	}
 
 	runServer(opts)
 }
 
-func connectMaster(opts config.Opts) error {
+func connectMaster(opts config.Opts) {
 	ip, port := opts.MasterIP, opts.MasterPort
 
 	c, err := net.Dial("tcp", fmt.Sprintf("%s:%d", ip, port))
 	if err != nil {
-		return fmt.Errorf("net.Dial failed: %v", err)
+		log.Fatalf("net.Dial failed: %v", err)
 	}
 
 	handler := protocol.NewHandler(
-		&opts,
 		protocol.NewConnection(c),
+		&opts,
 		storage.GetCache(),
+		nil,
 	)
 
-	return handler.Sync()
+	if err = handler.Sync(); err != nil {
+		log.Fatalf("handler.Sync failed: %v", err)
+	}
 }
 
 func runServer(opts config.Opts) {
@@ -61,6 +61,8 @@ func runServer(opts config.Opts) {
 		os.Exit(1)
 	}
 
+	slaves := make(map[string]*protocol.Connection)
+
 	for {
 		c, err := l.Accept()
 		if err != nil {
@@ -69,9 +71,11 @@ func runServer(opts config.Opts) {
 		}
 
 		handler := protocol.NewHandler(
-			&opts,
 			protocol.NewConnection(c),
-			storage.GetCache())
+			&opts,
+			storage.GetCache(),
+			slaves,
+		)
 
 		go handler.Handle()
 	}

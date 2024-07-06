@@ -26,6 +26,10 @@ func (c *Connection) Close() {
 	c.conn.Close()
 }
 
+func (c *Connection) RemoteAddr() net.Addr {
+	return c.conn.RemoteAddr()
+}
+
 // Read returns just one token from the given connection.
 func (c *Connection) Read() (string, error) {
 	for {
@@ -41,6 +45,10 @@ func (c *Connection) Read() (string, error) {
 			return ret, nil
 		}
 	}
+}
+
+func (c *Connection) ReadBytes(buf []byte) (int, error) {
+	return c.conn.Read(buf)
 }
 
 // WriteBytes is a low-level write operation on the connection.
