@@ -416,7 +416,7 @@ func (h *Handler) handleInfo(_ []string) error {
 
 func (h *Handler) handleReplConf(request []string) error {
 	if h.opts.Role != "master" {
-		if !strings.EqualFold(request[1], "GETACK") {
+		if !strings.EqualFold(request[0], "GETACK") {
 			return fmt.Errorf("cannot handle command: %v", request)
 		}
 
