@@ -11,6 +11,7 @@ type Connection struct {
 	conn   net.Conn
 	reader *bufio.Reader
 	token  string
+	offset uint64
 }
 
 // NewConnection returns a new RequestLoop instance.
@@ -30,8 +31,17 @@ func (c *Connection) RemoteAddr() net.Addr {
 	return c.conn.RemoteAddr()
 }
 
+func (c *Connection) Offset() uint64 {
+	return c.offset
+}
+
 // Read returns just one token from the given connection.
-func (c *Connection) Read() (string, error) {
+// The second return value is the total number of bytes read from the connection.
+func (c *Connection) Read() (ret string, _ error) {
+	defer func() {
+		c.offset += uint64(len(ret) + 2)
+	}()
+
 	for {
 		bytes, isPrefix, err := c.reader.ReadLine()
 		if err != nil {
@@ -47,7 +57,11 @@ func (c *Connection) Read() (string, error) {
 	}
 }
 
-func (c *Connection) ReadBytes(buf []byte) (int, error) {
+func (c *Connection) ReadBytes(buf []byte) (r int, _ error) {
+	defer func() {
+		c.offset += uint64(r)
+	}()
+
 	r, err := c.reader.Read(buf)
 	if err != nil {
 		return 0, fmt.Errorf("c.reader.Read: %w", err)

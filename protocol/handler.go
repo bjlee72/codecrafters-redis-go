@@ -15,13 +15,14 @@ import (
 )
 
 type Handler struct {
-	server     bool
-	opts       *config.Opts
-	conn       *Connection
-	cache      *storage.Cache
-	info       info.Info
-	slaves     map[string]*Connection
-	slavesLock sync.Mutex
+	server                 bool
+	opts                   *config.Opts
+	conn                   *Connection
+	cache                  *storage.Cache
+	info                   info.Info
+	slaves                 map[string]*Connection
+	slavesLock             sync.RWMutex
+	replicationStartOffset uint64
 }
 
 func NewClient(conn *Connection, opts *config.Opts, cache *storage.Cache, slaves map[string]*Connection) *Handler {
@@ -45,8 +46,8 @@ func newHandler(conn *Connection, server bool, opts *config.Opts, cache *storage
 				MasterReplOffset: opts.ReplicationOffset,
 			},
 		},
-		slaves:     slaves,
-		slavesLock: sync.Mutex{},
+		slaves:                 slaves,
+		replicationStartOffset: 0,
 	}
 }
 
@@ -91,6 +92,8 @@ func (h *Handler) Handle() error {
 		if err := h.shouldReadRDB(); err != nil {
 			return fmt.Errorf("shouldReadRDB: %w", err)
 		}
+
+		h.replicationStartOffset = h.conn.Offset()
 	}
 
 	for {
@@ -131,7 +134,7 @@ func (h *Handler) propagate(cmd string, bulkArray string) error {
 	errors := make([]string, 0)
 	for _, conn := range h.slaves {
 		if err := conn.Write(bulkArray); err != nil {
-			errors = append(errors, fmt.Sprintf("conn.Write: %w", err))
+			errors = append(errors, fmt.Sprintf("conn.Write: %v", err))
 		}
 	}
 
@@ -266,9 +269,12 @@ func (h *Handler) processRequest(requestArray []string) error {
 	switch cmd {
 
 	case "PING":
-		err := h.handlePing()
-		if err != nil {
-			return fmt.Errorf("handlePing: %v", err)
+		if h.server {
+			// We don't handle ping when master sends to slave for keep-alive purpose.
+			err := h.handlePing()
+			if err != nil {
+				return fmt.Errorf("handlePing: %v", err)
+			}
 		}
 
 	case "ECHO":
@@ -420,7 +426,10 @@ func (h *Handler) handleReplConf(request []string) error {
 			return fmt.Errorf("cannot handle command: %v", request)
 		}
 
-		err := h.conn.Write("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$1\r\n0\r\n")
+		transferred := h.conn.Offset() - h.replicationStartOffset - 37
+		r := strconv.FormatUint(transferred, 10)
+
+		err := h.conn.Write(fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$%d\r\n%s\r\n", len(r), r))
 		if err != nil {
 			return fmt.Errorf("h.conn.Write failed: %w", err)
 		}
