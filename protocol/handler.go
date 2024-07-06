@@ -436,7 +436,7 @@ func (h *Handler) handlePsync(id string, offset int) error {
 		return fmt.Errorf("wrong rsync request: id: %s, offset: %d", id, offset)
 	}
 
-	if offset == -1 { // FULLRESYNC
+	if offset <= -1 { // FULLRESYNC
 		ret := fmt.Sprintf("+FULLRESYNC %s 0\r\n", h.opts.ReplicationID)
 		if err := h.conn.Write(ret); err != nil {
 			return fmt.Errorf("write response failed: %v", err)
