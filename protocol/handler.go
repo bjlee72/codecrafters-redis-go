@@ -338,12 +338,6 @@ func (h *Handler) processRequest(requestArray []string) error {
 		if err != nil {
 			return fmt.Errorf("handlePsync: %v", err)
 		}
-
-		// register a new slave to update continuously.
-		h.slavesLock.Lock()
-		remoteAddr := h.conn.RemoteAddr().String()
-		h.slaves[remoteAddr] = h.conn
-		h.slavesLock.Unlock()
 	}
 
 	return nil
