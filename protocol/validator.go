@@ -3,7 +3,12 @@ package protocol
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
+
+func CommandEquals(cmd1, cmd2 string) bool {
+	return strings.EqualFold(cmd1, cmd2)
+}
 
 // ArrayLength validates the given array type '*#' and returns the number after '*'
 func ArrayLength(str string) (int, error) {

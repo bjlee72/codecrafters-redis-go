@@ -4,10 +4,12 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
+	"log"
 	"os"
 	"strconv"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/codecrafters-io/redis-starter-go/config"
 	"github.com/codecrafters-io/redis-starter-go/info"
@@ -15,25 +17,36 @@ import (
 )
 
 type Handler struct {
-	server                 bool
-	opts                   *config.Opts
-	conn                   *Connection
-	cache                  *storage.Cache
-	info                   info.Info
-	slaves                 map[string]*Connection
-	slavesLock             sync.RWMutex
+	server bool
+	opts   *config.Opts
+	conn   *Connection
+	cache  *storage.Cache
+	info   info.Info
+
+	// only for master.
+	slaves          map[string]*Slave
+	slavesLock      sync.RWMutex
+	progationOffset uint64 // the offset that we expect to be acknowledged by the next REPLCONF ACK ?? response.
+	wg              *sync.WaitGroup
+
+	// only for slaves.
 	replicationStartOffset uint64
 }
 
-func NewClient(conn *Connection, opts *config.Opts, cache *storage.Cache, slaves map[string]*Connection) *Handler {
+type Slave struct {
+	conn             *Connection
+	propagatedOffset uint64 // the offset that the slave last acked with REPLCONF ACK ?? response.
+}
+
+func NewClient(conn *Connection, opts *config.Opts, cache *storage.Cache, slaves map[string]*Slave) *Handler {
 	return newHandler(conn, false, opts, cache, slaves)
 }
 
-func NewServer(conn *Connection, opts *config.Opts, cache *storage.Cache, slaves map[string]*Connection) *Handler {
+func NewServer(conn *Connection, opts *config.Opts, cache *storage.Cache, slaves map[string]*Slave) *Handler {
 	return newHandler(conn, true, opts, cache, slaves)
 }
 
-func newHandler(conn *Connection, server bool, opts *config.Opts, cache *storage.Cache, slaves map[string]*Connection) *Handler {
+func newHandler(conn *Connection, server bool, opts *config.Opts, cache *storage.Cache, slaves map[string]*Slave) *Handler {
 	return &Handler{
 		conn:   conn,
 		server: server,
@@ -60,7 +73,7 @@ func (h *Handler) Handle() error {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
-		if _, err := h.shouldRead("PONG"); err != nil {
+		if _, err := h.shouldReadCommand("PONG"); err != nil {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
@@ -69,7 +82,7 @@ func (h *Handler) Handle() error {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
-		if _, err := h.shouldRead("OK"); err != nil {
+		if _, err := h.shouldReadCommand("OK"); err != nil {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
@@ -77,7 +90,7 @@ func (h *Handler) Handle() error {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
-		if _, err := h.shouldRead("OK"); err != nil {
+		if _, err := h.shouldReadCommand("OK"); err != nil {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
@@ -85,7 +98,7 @@ func (h *Handler) Handle() error {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
-		if _, err := h.shouldReadPrefix("FULLRESYNC"); err != nil {
+		if _, err := h.shouldReadCommandPrefix("FULLRESYNC"); err != nil {
 			return fmt.Errorf("shouldReadPrefix failed: %w", err)
 		}
 
@@ -113,7 +126,7 @@ func (h *Handler) Handle() error {
 		}
 
 		if h.opts.Role == "master" {
-			if err := h.propagate(request[0], ToBulkStringArray(request)); err != nil {
+			if err := h.propagate(NewArray(request)); err != nil {
 				err = fmt.Errorf("h.propagate failed: %w", err)
 				fmt.Fprintln(os.Stderr, err.Error())
 				return err
@@ -126,14 +139,16 @@ var propagateCommand = map[string]bool{
 	"SET": true,
 }
 
-func (h *Handler) propagate(cmd string, bulkArray string) error {
-	if !propagateCommand[cmd] {
+func (h *Handler) propagate(msg *Message) error {
+	if !msg.EligibleForPropagation() {
 		return nil
 	}
 
+	h.progationOffset += uint64(len(msg.ToR2()))
+
 	errors := make([]string, 0)
-	for _, conn := range h.slaves {
-		if err := conn.Write(bulkArray); err != nil {
+	for _, s := range h.slaves {
+		if err := s.conn.Write(msg.ToR2()); err != nil {
 			errors = append(errors, fmt.Sprintf("conn.Write: %v", err))
 		}
 	}
@@ -187,27 +202,27 @@ func (h *Handler) read() ([]string, error) {
 	return requestArray, nil
 }
 
-func (h *Handler) shouldRead(cmd string) ([]string, error) {
+func (h *Handler) shouldReadCommand(cmd string) ([]string, error) {
 	msg, err := h.read()
 	if err != nil {
 		return nil, fmt.Errorf("h.read failed: %w", err)
 	}
 
-	if !strings.EqualFold(cmd, msg[0]) {
+	if !CommandEquals(cmd, msg[0]) {
 		return nil, fmt.Errorf("cmd mismatch: expected: %s actual: %v", cmd, msg)
 	}
 
 	return msg, nil
 }
 
-func (h *Handler) shouldReadPrefix(cmd string) ([]string, error) {
+func (h *Handler) shouldReadCommandPrefix(cmd string) ([]string, error) {
 	msg, err := h.read()
 	if err != nil {
 		return nil, fmt.Errorf("h.read failed: %w", err)
 	}
 
 	prefix := msg[0][:len(cmd)]
-	if !strings.EqualFold(cmd, prefix) {
+	if !CommandEquals(cmd, prefix) {
 		return nil, fmt.Errorf("cmd mismatch: expected: %s actual: %v", cmd, msg)
 	}
 
@@ -320,6 +335,12 @@ func (h *Handler) processRequest(requestArray []string) error {
 			return fmt.Errorf("handleReplConf: %v", err)
 		}
 
+		// register a new slave to update continuously.
+		h.slavesLock.Lock()
+		remoteAddr := h.conn.RemoteAddr().String()
+		h.slaves[remoteAddr] = &Slave{h.conn, 0}
+		h.slavesLock.Unlock()
+
 	case "PSYNC":
 		if h.opts.Role != "master" {
 			return fmt.Errorf("role is not master: %s", h.opts.Role)
@@ -327,19 +348,33 @@ func (h *Handler) processRequest(requestArray []string) error {
 
 		offset, err := strconv.Atoi(requestArray[2])
 		if err != nil {
-			return fmt.Errorf("strconv.Atoi: %v", err)
+			return fmt.Errorf("strconv.Atoi: %w", err)
 		}
 
 		err = h.handlePsync(requestArray[1], offset)
 		if err != nil {
-			return fmt.Errorf("handlePsync: %v", err)
+			return fmt.Errorf("handlePsync: %w", err)
 		}
 
-		// register a new slave to update continuously.
-		h.slavesLock.Lock()
-		remoteAddr := h.conn.RemoteAddr().String()
-		h.slaves[remoteAddr] = h.conn
-		h.slavesLock.Unlock()
+	case "WAIT":
+		if h.opts.Role != "master" {
+			return fmt.Errorf("role is not master: %s", h.opts.Role)
+		}
+
+		numReplicas, err := strconv.Atoi(requestArray[1])
+		if err != nil {
+			return fmt.Errorf("strconv.Atoi: %w", err)
+		}
+
+		timeout, err := strconv.Atoi(requestArray[2])
+		if err != nil {
+			return fmt.Errorf("strconv.Atoi: %w", err)
+		}
+
+		err = h.handleWait(numReplicas, timeout)
+		if err != nil {
+			return fmt.Errorf("h.handleWait failed: %w", err)
+		}
 	}
 
 	return nil
@@ -420,24 +455,77 @@ func (h *Handler) handleInfo(_ []string) error {
 	return nil
 }
 
-func (h *Handler) handleReplConf(request []string) error {
-	if h.opts.Role != "master" {
-		if !strings.EqualFold(request[0], "GETACK") {
-			return fmt.Errorf("cannot handle command: %v", request)
+func (h *Handler) handleWait(numReplicas, timeout int) error {
+	toWait := numReplicas
+	for _, slave := range h.slaves {
+		if h.progationOffset == slave.propagatedOffset {
+			toWait = toWait - 1
 		}
-
-		// 37 represents the length of REPLCONF GETACK command itself.
-		transferred := h.conn.Offset() - h.replicationStartOffset - 37
-		r := strconv.FormatUint(transferred, 10)
-
-		err := h.conn.Write(fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$%d\r\n%s\r\n", len(r), r))
+	}
+	if toWait == 0 {
+		// nothing to wait for - return immediately.
+		err := h.conn.Write(NewInt(numReplicas).ToR2())
 		if err != nil {
 			return fmt.Errorf("h.conn.Write failed: %w", err)
 		}
+		return nil
+	}
 
-		h.replicationStartOffset = h.conn.Offset()
+	h.wg = &sync.WaitGroup{}
+	h.wg.Add(toWait)
+
+	c := make(chan struct{})
+	go func() {
+		defer close(c)
+		h.wg.Wait()
+	}()
+
+	select {
+	case <-c:
+	case <-time.After(time.Millisecond * time.Duration(timeout)):
+	}
+
+	result := 0
+	for _, slave := range h.slaves {
+		if h.progationOffset == slave.propagatedOffset {
+			result = result + 1
+		}
+	}
+
+	// nothing to wait for - return immediately.
+	err := h.conn.Write(NewInt(result).ToR2())
+	if err != nil {
+		return fmt.Errorf("h.conn.Write failed: %w", err)
+	}
+	return nil
+}
+
+func (h *Handler) handleReplConf(request []string) error {
+	if h.opts.Role != "master" && CommandEquals(request[0], "GETACK") {
+		// 37 represents the length of REPLCONF GETACK * command itself.
+		transferred := h.conn.Offset() - h.replicationStartOffset - 37
+		r := strconv.FormatUint(transferred, 10)
+
+		// send response to master.
+		if err := h.conn.Write(NewArray([]string{"REPLCONF", "ACK", r}).ToR2()); err != nil {
+			return fmt.Errorf("h.conn.Write failed: %w", err)
+		}
 
 		return nil
+	} else if h.opts.Role == "master" && CommandEquals(request[0], "ACK") {
+		acked, err := strconv.ParseUint(request[1], 10, 64)
+		if err != nil {
+			return fmt.Errorf("strconf.ParseInt failed: %w", err)
+		}
+		remoteAddr := h.conn.RemoteAddr().String()
+		slave, ok := h.slaves[remoteAddr]
+		if !ok {
+			log.Fatal("cannot find the right slave: ", remoteAddr)
+		}
+		slave.propagatedOffset = acked
+		if acked == h.progationOffset {
+			h.wg.Done()
+		}
 	}
 
 	ret := "+OK\r\n"
@@ -479,6 +567,7 @@ func (h *Handler) handlePsync(id string, offset int) error {
 		}
 	} else {
 		return fmt.Errorf("not implemented")
+		// Should implement a response to PSYNC <replicationid> <offset>
 	}
 
 	return nil

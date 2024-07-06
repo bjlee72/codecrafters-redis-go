@@ -44,7 +44,7 @@ func connectMaster(opts config.Opts) {
 		protocol.NewConnection(c),
 		&opts,
 		storage.GetCache(),
-		map[string]*protocol.Connection{},
+		map[string]*protocol.Slave{},
 	)
 
 	// TODO: if connection to master fails, we should retry, instread of killing entire thing
@@ -60,7 +60,7 @@ func runServer(opts config.Opts) {
 		os.Exit(1)
 	}
 
-	slaves := make(map[string]*protocol.Connection)
+	slaves := make(map[string]*protocol.Slave)
 
 	for {
 		c, err := l.Accept()
