@@ -27,7 +27,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	if opts.Role == "slave" {
+	if opts.Role != "master" {
 		go connectMaster(opts)
 	}
 
@@ -35,9 +35,7 @@ func main() {
 }
 
 func connectMaster(opts config.Opts) {
-	ip, port := opts.MasterIP, opts.MasterPort
-
-	c, err := net.Dial("tcp", fmt.Sprintf("%s:%d", ip, port))
+	c, err := net.Dial("tcp", fmt.Sprintf("%s:%d", opts.MasterIP, opts.MasterPort))
 	if err != nil {
 		log.Fatalf("net.Dial failed: %v", err)
 	}

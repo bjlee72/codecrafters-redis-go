@@ -85,13 +85,15 @@ func (h *Handler) Sync() error {
 	}
 
 	/*
-	 * Loop to handle the incoming requests.
+	 * Loop to handle the incoming requests from master.
 	 */
 	for {
 		request, err := h.read()
 		if err != nil {
 			return fmt.Errorf("h.read: %v", err)
 		}
+
+		fmt.Println("from master:", request)
 
 		// requestArray is a single request from a client.
 		if err := h.processRequest(request); err != nil {
@@ -118,13 +120,29 @@ func (h *Handler) Handle() {
 			fmt.Fprintf(os.Stderr, "handleRequest failed: %v", err)
 			return
 		}
+
+		if h.opts.Role == "master" {
+			if map[string]bool{
+				"SET": true,
+			}[strings.ToUpper(request[0])] {
+				// recover the request to the original format
+				blkStrings := make([]string, 0)
+				for _, seg := range request {
+					blkStrings = append(blkStrings, fmt.Sprintf("$%d\r\n%s", len(seg), seg))
+				}
+
+				prop := fmt.Sprintf("*%d\r\n%s\r\n", len(blkStrings), strings.Join(blkStrings, "\r\n"))
+				if err := h.Propagate(prop); err != nil {
+					fmt.Fprintf(os.Stderr, "h.Progagate: %v", err)
+				}
+			}
+		}
 	}
 }
 
 func (h *Handler) Propagate(str string) error {
 	errors := make([]string, 0)
 	for _, conn := range h.slaves {
-		fmt.Println(str)
 		if err := conn.Write(str); err != nil {
 			errors = append(errors, fmt.Sprintf("conn.Write: %v", err))
 		}
@@ -137,6 +155,7 @@ func (h *Handler) Propagate(str string) error {
 	return nil
 }
 
+// read is a basic request-reading routine. Assumes the request is always an array.
 func (h *Handler) read() ([]string, error) {
 	token, err := h.conn.Read()
 	if err != nil {
@@ -235,6 +254,7 @@ func (h *Handler) shouldReadRDB() error {
 		}
 
 		// TODO: copy buf to somewhere.
+		_ = buf
 	}
 
 	if total > 0 {
@@ -286,20 +306,6 @@ func (h *Handler) processRequest(requestArray []string) error {
 		err = h.handleSet(key, value, options)
 		if err != nil {
 			return fmt.Errorf("handleSet: %v", err)
-		}
-
-		fmt.Println(h.opts.Role)
-
-		// TODO: somewhere nicer
-		if h.opts.Role == "master" {
-			prop := fmt.Sprintf(
-				"*3\r\n$3\r\nSET\r\n$%d\r\n%s\r\n$%d\r\n%s\r\n",
-				len(key), key, len(value), value,
-			)
-			err := h.Propagate(prop)
-			if err != nil {
-				fmt.Fprintf(os.Stderr, "h.Progagate: %v", err)
-			}
 		}
 
 	case "GET":
@@ -376,7 +382,7 @@ func (h *Handler) handleSet(key, val string, options map[string][]string) error 
 
 	h.cache.Set(key, val, expireAfter)
 
-	if h.opts.Role == "slave" {
+	if h.opts.Role != "master" {
 		return nil
 	}
 

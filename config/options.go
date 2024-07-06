@@ -53,7 +53,6 @@ func (o *Opts) Validate() error {
 		if err != nil {
 			return fmt.Errorf("not the valid IP address format: %s", tokens[0])
 		}
-		fmt.Println(ip)
 		o.MasterIP = ip[0]
 
 		port, err := strconv.Atoi(tokens[1])
