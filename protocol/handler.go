@@ -309,10 +309,6 @@ func (h *Handler) processRequest(requestArray []string) error {
 		}
 
 	case "REPLCONF":
-		if h.opts.Role != "master" {
-			return fmt.Errorf("role is not master: %s", h.opts.Role)
-		}
-
 		err := h.handleReplConf(requestArray[1:])
 		if err != nil {
 			return fmt.Errorf("handleReplConf: %v", err)
@@ -428,6 +424,8 @@ func (h *Handler) handleReplConf(request []string) error {
 		if err != nil {
 			return fmt.Errorf("h.conn.Write failed: %w", err)
 		}
+
+		return nil
 	}
 
 	ret := "+OK\r\n"
