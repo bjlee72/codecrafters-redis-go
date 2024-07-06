@@ -426,6 +426,7 @@ func (h *Handler) handleReplConf(request []string) error {
 			return fmt.Errorf("cannot handle command: %v", request)
 		}
 
+		// 37 represents the length of REPLCONF GETACK command itself.
 		transferred := h.conn.Offset() - h.replicationStartOffset - 37
 		r := strconv.FormatUint(transferred, 10)
 
@@ -433,6 +434,8 @@ func (h *Handler) handleReplConf(request []string) error {
 		if err != nil {
 			return fmt.Errorf("h.conn.Write failed: %w", err)
 		}
+
+		h.replicationStartOffset = h.conn.Offset()
 
 		return nil
 	}
