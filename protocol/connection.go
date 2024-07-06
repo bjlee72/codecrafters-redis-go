@@ -48,7 +48,7 @@ func (c *Connection) Read() (string, error) {
 }
 
 func (c *Connection) ReadBytes(buf []byte) (int, error) {
-	return c.conn.Read(buf)
+	return c.reader.Read(buf)
 }
 
 // WriteBytes is a low-level write operation on the connection.

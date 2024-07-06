@@ -15,6 +15,7 @@ import (
 )
 
 type Handler struct {
+	server     bool
 	opts       *config.Opts
 	conn       *Connection
 	cache      *storage.Cache
@@ -23,11 +24,20 @@ type Handler struct {
 	slavesLock sync.Mutex
 }
 
-func NewHandler(conn *Connection, opts *config.Opts, cache *storage.Cache, slaves map[string]*Connection) *Handler {
+func NewClient(conn *Connection, opts *config.Opts, cache *storage.Cache, slaves map[string]*Connection) *Handler {
+	return newHandler(conn, false, opts, cache, slaves)
+}
+
+func NewServer(conn *Connection, opts *config.Opts, cache *storage.Cache, slaves map[string]*Connection) *Handler {
+	return newHandler(conn, true, opts, cache, slaves)
+}
+
+func newHandler(conn *Connection, server bool, opts *config.Opts, cache *storage.Cache, slaves map[string]*Connection) *Handler {
 	return &Handler{
-		opts:  opts,
-		conn:  conn,
-		cache: cache,
+		conn:   conn,
+		server: server,
+		opts:   opts,
+		cache:  cache,
 		info: info.Info{
 			Replication: info.Replication{
 				Role:             opts.Role,
@@ -40,116 +50,90 @@ func NewHandler(conn *Connection, opts *config.Opts, cache *storage.Cache, slave
 	}
 }
 
-// Sync syncs the status of cache with master.
-func (h *Handler) Sync() error {
+func (h *Handler) Handle() error {
 	defer h.conn.Close()
 
-	/*
-	 * Handshake process.
-	 */
-	if err := h.conn.Write("*1\r\n$4\r\nPING\r\n"); err != nil {
-		return fmt.Errorf("conn.Write failed: %v", err)
-	}
-
-	if _, err := h.shouldRead("PONG"); err != nil {
-		return fmt.Errorf("conn.Write failed: %v", err)
-	}
-
-	portStr := strconv.Itoa(h.opts.Port)
-	if err := h.conn.Write(fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$%d\r\n%s\r\n", len(portStr), portStr)); err != nil {
-		return fmt.Errorf("conn.Write failed: %v", err)
-	}
-
-	if _, err := h.shouldRead("OK"); err != nil {
-		return fmt.Errorf("conn.Write failed: %v", err)
-	}
-
-	if err := h.conn.Write("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"); err != nil {
-		return fmt.Errorf("conn.Write failed: %v", err)
-	}
-
-	if _, err := h.shouldRead("OK"); err != nil {
-		return fmt.Errorf("conn.Write failed: %v", err)
-	}
-
-	if err := h.conn.Write("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"); err != nil {
-		return fmt.Errorf("conn.Write failed: %v", err)
-	}
-
-	if _, err := h.shouldReadPrefix("FULLRESYNC"); err != nil {
-		return fmt.Errorf("conn.Write failed: %v", err)
-	}
-
-	if err := h.shouldReadRDB(); err != nil {
-		return fmt.Errorf("shouldReadRDB: %v", err)
-	}
-
-	/*
-	 * Loop to handle the incoming requests from master.
-	 */
-	for {
-		request, err := h.read()
-		if err != nil {
-			return fmt.Errorf("h.read: %v", err)
+	if !h.server && h.opts.Role == "slave" {
+		// I'm connecting master as slave. NOTE: slave can be a server as well (for example, for INFO command)
+		if err := h.conn.Write("*1\r\n$4\r\nPING\r\n"); err != nil {
+			return fmt.Errorf("conn.Write failed: %v", err)
 		}
 
-		fmt.Println("from master:", request)
+		if _, err := h.shouldRead("PONG"); err != nil {
+			return fmt.Errorf("conn.Write failed: %v", err)
+		}
 
-		// requestArray is a single request from a client.
-		if err := h.processRequest(request); err != nil {
-			return fmt.Errorf("handleRequest failed: %v", err)
+		portStr := strconv.Itoa(h.opts.Port)
+		if err := h.conn.Write(fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$%d\r\n%s\r\n", len(portStr), portStr)); err != nil {
+			return fmt.Errorf("conn.Write failed: %v", err)
+		}
+
+		if _, err := h.shouldRead("OK"); err != nil {
+			return fmt.Errorf("conn.Write failed: %v", err)
+		}
+
+		if err := h.conn.Write("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"); err != nil {
+			return fmt.Errorf("conn.Write failed: %v", err)
+		}
+
+		if _, err := h.shouldRead("OK"); err != nil {
+			return fmt.Errorf("conn.Write failed: %v", err)
+		}
+
+		if err := h.conn.Write("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"); err != nil {
+			return fmt.Errorf("conn.Write failed: %v", err)
+		}
+
+		if _, err := h.shouldReadPrefix("FULLRESYNC"); err != nil {
+			return fmt.Errorf("shouldReadPrefix failed: %v", err)
+		}
+
+		if err := h.shouldReadRDB(); err != nil {
+			return fmt.Errorf("shouldReadRDB: %v", err)
 		}
 	}
-}
-
-func (h *Handler) Handle() {
-	defer h.conn.Close()
-
-	// read, validate, and process.
 
 	for {
 		request, err := h.read()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err.Error())
-			return
+			return err
 		}
 
 		// requestArray is a single request from a client.
 		err = h.processRequest(request)
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "handleRequest failed: %v", err)
-			return
+			return err
 		}
 
 		if h.opts.Role == "master" {
-			if map[string]bool{
-				"SET": true,
-			}[strings.ToUpper(request[0])] {
-				// recover the request to the original format
-				blkStrings := make([]string, 0)
-				for _, seg := range request {
-					blkStrings = append(blkStrings, fmt.Sprintf("$%d\r\n%s", len(seg), seg))
-				}
-
-				prop := fmt.Sprintf("*%d\r\n%s\r\n", len(blkStrings), strings.Join(blkStrings, "\r\n"))
-				if err := h.Propagate(prop); err != nil {
-					fmt.Fprintf(os.Stderr, "h.Progagate: %v", err)
-				}
+			if err := h.propagate(request[0], ToBulkStringArray(request)); err != nil {
+				fmt.Fprintf(os.Stderr, "h.progagate: %v", err)
+				return err
 			}
 		}
 	}
 }
 
-func (h *Handler) Propagate(str string) error {
+var propagateCommand = map[string]bool{
+	"SET": true,
+}
+
+func (h *Handler) propagate(cmd string, bulkArray string) error {
+	if !propagateCommand[cmd] {
+		return nil
+	}
+
 	errors := make([]string, 0)
 	for _, conn := range h.slaves {
-		if err := conn.Write(str); err != nil {
+		if err := conn.Write(bulkArray); err != nil {
 			errors = append(errors, fmt.Sprintf("conn.Write: %v", err))
 		}
 	}
 
 	if len(errors) > 0 {
-		return fmt.Errorf("Propagate failed: [%s]", strings.Join(errors, ", "))
+		return fmt.Errorf("propagate failed: [%s]", strings.Join(errors, ", "))
 	}
 
 	return nil
@@ -166,7 +150,7 @@ func (h *Handler) read() ([]string, error) {
 		return []string{token[1:]}, nil
 	}
 
-	num, err := ValidateArray(token)
+	num, err := ArrayLength(token)
 	if err != nil {
 		return nil, fmt.Errorf("ValidateArray(): %v", err)
 	}
@@ -178,7 +162,7 @@ func (h *Handler) read() ([]string, error) {
 			return nil, fmt.Errorf("h.conn.GetToken(): %v", err)
 		}
 
-		l, err := ValidateBulkString(token)
+		l, err := BulkStringLength(token)
 		if err != nil {
 			return nil, fmt.Errorf("ValidateString(): %v", err)
 		}
@@ -239,23 +223,30 @@ func (h *Handler) shouldReadRDB() error {
 		return fmt.Errorf("strconf.Atoi: %v", err)
 	}
 
+	result := make([]byte, 0, total)
 	for total > 0 {
-		buf := make([]byte, 0, total)
-		rd, err := h.conn.ReadBytes(buf)
-		if rd > 0 {
-			total = total - rd
-		}
+		tmp := make([]byte, min(1024, total))
+		rd, err := h.conn.ReadBytes(tmp)
 		if err != nil {
 			if err == io.EOF {
+				total = total - rd
 				break
 			} else {
 				return fmt.Errorf("h.conn.ReadBytes: %v", err)
 			}
 		}
 
+		if rd == 0 {
+			continue
+		}
+
+		total = total - rd
+
 		// TODO: copy buf to somewhere.
-		_ = buf
+		result = append(result, tmp[:rd]...)
 	}
+
+	_ = result
 
 	if total > 0 {
 		// incomplete termination.
@@ -338,6 +329,12 @@ func (h *Handler) processRequest(requestArray []string) error {
 		if err != nil {
 			return fmt.Errorf("handlePsync: %v", err)
 		}
+
+		// register a new slave to update continuously.
+		h.slavesLock.Lock()
+		remoteAddr := h.conn.RemoteAddr().String()
+		h.slaves[remoteAddr] = h.conn
+		h.slavesLock.Unlock()
 	}
 
 	return nil

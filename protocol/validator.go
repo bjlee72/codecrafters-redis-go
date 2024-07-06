@@ -5,8 +5,8 @@ import (
 	"strconv"
 )
 
-// ValidateArray validates the given array type '*#' and returns the number after '*'
-func ValidateArray(str string) (int, error) {
+// ArrayLength validates the given array type '*#' and returns the number after '*'
+func ArrayLength(str string) (int, error) {
 	if str[0] != '*' {
 		return 0, fmt.Errorf("wrong array token '%s'", str)
 	}
@@ -19,7 +19,7 @@ func ValidateArray(str string) (int, error) {
 	return ret, nil
 }
 
-func ValidateBulkString(str string) (int, error) {
+func BulkStringLength(str string) (int, error) {
 	if str[0] != '$' {
 		return 0, fmt.Errorf("not a bulk string token '%s'", str)
 	}

@@ -40,15 +40,16 @@ func connectMaster(opts config.Opts) {
 		log.Fatalf("net.Dial failed: %v", err)
 	}
 
-	handler := protocol.NewHandler(
+	client := protocol.NewClient(
 		protocol.NewConnection(c),
 		&opts,
 		storage.GetCache(),
-		nil,
+		map[string]*protocol.Connection{},
 	)
 
-	if err = handler.Sync(); err != nil {
-		log.Fatalf("handler.Sync failed: %v", err)
+	// TODO: if connection to master fails, we should retry, instread of killing entire thing
+	if err = client.Handle(); err != nil {
+		fmt.Fprintf(os.Stderr, "[slave] handler.Handle failed: %v", err)
 	}
 }
 
@@ -68,13 +69,13 @@ func runServer(opts config.Opts) {
 			os.Exit(1)
 		}
 
-		handler := protocol.NewHandler(
+		server := protocol.NewServer(
 			protocol.NewConnection(c),
 			&opts,
 			storage.GetCache(),
 			slaves,
 		)
 
-		go handler.Handle()
+		go server.Handle()
 	}
 }
