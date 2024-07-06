@@ -4,7 +4,6 @@ import (
 	"encoding/base64"
 	"fmt"
 	"io"
-	"log"
 	"os"
 	"strconv"
 	"strings"
@@ -24,29 +23,21 @@ type Handler struct {
 	info   info.Info
 
 	// only for master.
-	slaves          map[string]*Slave
-	slavesLock      sync.RWMutex
-	progationOffset uint64 // the offset that we expect to be acknowledged by the next REPLCONF ACK ?? response.
-	wg              *sync.WaitGroup
+	mc *MasterConfig
 
 	// only for slaves.
 	replicationStartOffset uint64
 }
 
-type Slave struct {
-	conn             *Connection
-	propagatedOffset uint64 // the offset that the slave last acked with REPLCONF ACK ?? response.
+func NewClient(conn *Connection, opts *config.Opts, cache *storage.Cache) *Handler {
+	return newHandler(conn, false, opts, cache, nil)
 }
 
-func NewClient(conn *Connection, opts *config.Opts, cache *storage.Cache, slaves map[string]*Slave) *Handler {
-	return newHandler(conn, false, opts, cache, slaves)
+func NewServer(conn *Connection, opts *config.Opts, cache *storage.Cache, mc *MasterConfig) *Handler {
+	return newHandler(conn, true, opts, cache, mc)
 }
 
-func NewServer(conn *Connection, opts *config.Opts, cache *storage.Cache, slaves map[string]*Slave) *Handler {
-	return newHandler(conn, true, opts, cache, slaves)
-}
-
-func newHandler(conn *Connection, server bool, opts *config.Opts, cache *storage.Cache, slaves map[string]*Slave) *Handler {
+func newHandler(conn *Connection, server bool, opts *config.Opts, cache *storage.Cache, mc *MasterConfig) *Handler {
 	return &Handler{
 		conn:   conn,
 		server: server,
@@ -59,8 +50,8 @@ func newHandler(conn *Connection, server bool, opts *config.Opts, cache *storage
 				MasterReplOffset: opts.ReplicationOffset,
 			},
 		},
-		slaves:                 slaves,
 		replicationStartOffset: 0,
+		mc:                     mc,
 	}
 }
 
@@ -144,10 +135,10 @@ func (h *Handler) propagate(msg *Message) error {
 		return nil
 	}
 
-	h.progationOffset += uint64(len(msg.ToR2()))
+	h.mc.propagationOffset += uint64(len(msg.ToR2()))
 
 	errors := make([]string, 0)
-	for _, s := range h.slaves {
+	for _, s := range h.mc.slaves {
 		if err := s.conn.Write(msg.ToR2()); err != nil {
 			errors = append(errors, fmt.Sprintf("conn.Write: %v", err))
 		}
@@ -335,16 +326,13 @@ func (h *Handler) processRequest(requestArray []string) error {
 			return fmt.Errorf("handleReplConf: %v", err)
 		}
 
-		// register a new slave to update continuously.
-		h.slavesLock.Lock()
-		remoteAddr := h.conn.RemoteAddr().String()
-		h.slaves[remoteAddr] = &Slave{h.conn, 0}
-		h.slavesLock.Unlock()
-
 	case "PSYNC":
 		if h.opts.Role != "master" {
 			return fmt.Errorf("role is not master: %s", h.opts.Role)
 		}
+
+		// register a new slave to update continuously.
+		h.mc.AddSlave(h.conn)
 
 		offset, err := strconv.Atoi(requestArray[2])
 		if err != nil {
@@ -456,29 +444,36 @@ func (h *Handler) handleInfo(_ []string) error {
 }
 
 func (h *Handler) handleWait(numReplicas, timeout int) error {
-	fmt.Println(numReplicas, timeout)
-	toWait := numReplicas
-	for _, slave := range h.slaves {
-		if h.progationOffset == slave.propagatedOffset {
-			toWait = toWait - 1
+	toWait := make([]*Connection, 0)
+	for _, slave := range h.mc.slaves {
+		if h.mc.propagationOffset > slave.propagatedOffset {
+			toWait = append(toWait, slave.conn)
 		}
 	}
-	if toWait <= 0 {
+	if len(toWait) == 0 {
 		// nothing to wait for - return immediately.
-		err := h.conn.Write(NewInt(len(h.slaves)).ToR2())
+		err := h.conn.Write(NewInt(len(h.mc.slaves)).ToR2())
 		if err != nil {
 			return fmt.Errorf("h.conn.Write failed: %w", err)
 		}
 		return nil
 	}
 
-	h.wg = &sync.WaitGroup{}
-	h.wg.Add(toWait)
+	h.mc.wg = &sync.WaitGroup{}
+	h.mc.wg.Add(min(len(toWait), numReplicas))
+
+	getAck := NewArray([]string{"REPLCONF", "GETACK", "*"})
+	for _, c := range toWait {
+		if err := c.Write(getAck.ToR2()); err != nil {
+			fmt.Fprintf(os.Stderr, "c.Write failed: %v", err)
+			h.mc.wg.Done()
+		}
+	}
 
 	c := make(chan struct{})
 	go func() {
 		defer close(c)
-		h.wg.Wait()
+		h.mc.wg.Wait()
 	}()
 
 	select {
@@ -487,17 +482,20 @@ func (h *Handler) handleWait(numReplicas, timeout int) error {
 	}
 
 	result := 0
-	for _, slave := range h.slaves {
-		if h.progationOffset == slave.propagatedOffset {
-			result = result + 1
+	h.mc.ForEachSlave(func(mc *MasterConfig, s *Slave) {
+		if mc.propagationOffset == s.propagatedOffset {
+			result += 1
 		}
-	}
+	})
 
-	// nothing to wait for - return immediately.
 	err := h.conn.Write(NewInt(result).ToR2())
 	if err != nil {
 		return fmt.Errorf("h.conn.Write failed: %w", err)
 	}
+
+	// because we sent getAck command for this
+	h.mc.propagationOffset += uint64(len(getAck.ToR2()))
+
 	return nil
 }
 
@@ -518,15 +516,15 @@ func (h *Handler) handleReplConf(request []string) error {
 		if err != nil {
 			return fmt.Errorf("strconf.ParseInt failed: %w", err)
 		}
-		remoteAddr := h.conn.RemoteAddr().String()
-		slave, ok := h.slaves[remoteAddr]
-		if !ok {
-			log.Fatal("cannot find the right slave: ", remoteAddr)
-		}
-		slave.propagatedOffset = acked
-		if acked == h.progationOffset {
-			h.wg.Done()
-		}
+
+		h.mc.ForSlave(h.conn, func(mc *MasterConfig, s *Slave) {
+			s.propagatedOffset = acked
+			if s.propagatedOffset == mc.propagationOffset {
+				mc.wg.Done()
+			}
+		})
+
+		return nil
 	}
 
 	ret := "+OK\r\n"
