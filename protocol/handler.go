@@ -456,15 +456,16 @@ func (h *Handler) handleInfo(_ []string) error {
 }
 
 func (h *Handler) handleWait(numReplicas, timeout int) error {
+	fmt.Println(numReplicas, timeout)
 	toWait := numReplicas
 	for _, slave := range h.slaves {
 		if h.progationOffset == slave.propagatedOffset {
 			toWait = toWait - 1
 		}
 	}
-	if toWait == 0 {
+	if toWait <= 0 {
 		// nothing to wait for - return immediately.
-		err := h.conn.Write(NewInt(numReplicas).ToR2())
+		err := h.conn.Write(NewInt(len(h.slaves)).ToR2())
 		if err != nil {
 			return fmt.Errorf("h.conn.Write failed: %w", err)
 		}
