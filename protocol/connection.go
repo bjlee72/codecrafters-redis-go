@@ -35,7 +35,7 @@ func (c *Connection) Read() (string, error) {
 	for {
 		bytes, isPrefix, err := c.reader.ReadLine()
 		if err != nil {
-			return "", fmt.Errorf("reader.Readline: %v", err)
+			return "", fmt.Errorf("reader.Readline: %w", err)
 		}
 
 		c.token += string(bytes)
@@ -48,7 +48,11 @@ func (c *Connection) Read() (string, error) {
 }
 
 func (c *Connection) ReadBytes(buf []byte) (int, error) {
-	return c.reader.Read(buf)
+	r, err := c.reader.Read(buf)
+	if err != nil {
+		return 0, fmt.Errorf("c.reader.Read: %w", err)
+	}
+	return r, nil
 }
 
 // WriteBytes is a low-level write operation on the connection.
@@ -57,7 +61,7 @@ func (c *Connection) WriteBytes(bytes []byte) error {
 	for written < len(bytes) {
 		n, err := c.conn.Write(bytes)
 		if err != nil {
-			return fmt.Errorf("c.conn.Write failed: %v", err)
+			return fmt.Errorf("c.conn.Write failed: %w", err)
 		}
 		written += n
 	}

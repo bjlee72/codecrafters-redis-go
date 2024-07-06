@@ -56,46 +56,47 @@ func (h *Handler) Handle() error {
 	if !h.server && h.opts.Role == "slave" {
 		// I'm connecting master as slave. NOTE: slave can be a server as well (for example, for INFO command)
 		if err := h.conn.Write("*1\r\n$4\r\nPING\r\n"); err != nil {
-			return fmt.Errorf("conn.Write failed: %v", err)
+			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
 		if _, err := h.shouldRead("PONG"); err != nil {
-			return fmt.Errorf("conn.Write failed: %v", err)
+			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
 		portStr := strconv.Itoa(h.opts.Port)
 		if err := h.conn.Write(fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$%d\r\n%s\r\n", len(portStr), portStr)); err != nil {
-			return fmt.Errorf("conn.Write failed: %v", err)
+			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
 		if _, err := h.shouldRead("OK"); err != nil {
-			return fmt.Errorf("conn.Write failed: %v", err)
+			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
 		if err := h.conn.Write("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"); err != nil {
-			return fmt.Errorf("conn.Write failed: %v", err)
+			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
 		if _, err := h.shouldRead("OK"); err != nil {
-			return fmt.Errorf("conn.Write failed: %v", err)
+			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
 		if err := h.conn.Write("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"); err != nil {
-			return fmt.Errorf("conn.Write failed: %v", err)
+			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
 		if _, err := h.shouldReadPrefix("FULLRESYNC"); err != nil {
-			return fmt.Errorf("shouldReadPrefix failed: %v", err)
+			return fmt.Errorf("shouldReadPrefix failed: %w", err)
 		}
 
 		if err := h.shouldReadRDB(); err != nil {
-			return fmt.Errorf("shouldReadRDB: %v", err)
+			return fmt.Errorf("shouldReadRDB: %w", err)
 		}
 	}
 
 	for {
 		request, err := h.read()
 		if err != nil {
+			err = fmt.Errorf("h.read failed: %w", err)
 			fmt.Fprintln(os.Stderr, err.Error())
 			return err
 		}
@@ -103,13 +104,15 @@ func (h *Handler) Handle() error {
 		// requestArray is a single request from a client.
 		err = h.processRequest(request)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "handleRequest failed: %v", err)
+			err = fmt.Errorf("handleRequest failed: %w", err)
+			fmt.Fprintln(os.Stderr, err.Error())
 			return err
 		}
 
 		if h.opts.Role == "master" {
 			if err := h.propagate(request[0], ToBulkStringArray(request)); err != nil {
-				fmt.Fprintf(os.Stderr, "h.progagate: %v", err)
+				err = fmt.Errorf("h.propagate failed: %w", err)
+				fmt.Fprintln(os.Stderr, err.Error())
 				return err
 			}
 		}
@@ -128,7 +131,7 @@ func (h *Handler) propagate(cmd string, bulkArray string) error {
 	errors := make([]string, 0)
 	for _, conn := range h.slaves {
 		if err := conn.Write(bulkArray); err != nil {
-			errors = append(errors, fmt.Sprintf("conn.Write: %v", err))
+			errors = append(errors, fmt.Sprintf("conn.Write: %w", err))
 		}
 	}
 
@@ -143,7 +146,7 @@ func (h *Handler) propagate(cmd string, bulkArray string) error {
 func (h *Handler) read() ([]string, error) {
 	token, err := h.conn.Read()
 	if err != nil {
-		return nil, fmt.Errorf("conn.Read(): %v", err)
+		return nil, fmt.Errorf("conn.Read(): %w", err)
 	}
 
 	if token[0] == '+' { // simple string
@@ -152,24 +155,24 @@ func (h *Handler) read() ([]string, error) {
 
 	num, err := ArrayLength(token)
 	if err != nil {
-		return nil, fmt.Errorf("ValidateArray(): %v", err)
+		return nil, fmt.Errorf("ValidateArray(): %w", err)
 	}
 
 	requestArray := make([]string, 0, num)
 	for i := 0; i < num; i++ {
 		token, err := h.conn.Read()
 		if err != nil {
-			return nil, fmt.Errorf("h.conn.GetToken(): %v", err)
+			return nil, fmt.Errorf("h.conn.GetToken(): %w", err)
 		}
 
 		l, err := BulkStringLength(token)
 		if err != nil {
-			return nil, fmt.Errorf("ValidateString(): %v", err)
+			return nil, fmt.Errorf("ValidateString(): %w", err)
 		}
 
 		str, err := h.conn.Read()
 		if err != nil {
-			return nil, fmt.Errorf("h.conn.GetToken(): %v", err)
+			return nil, fmt.Errorf("h.conn.GetToken(): %w", err)
 		}
 		if l != len(str) {
 			return nil, fmt.Errorf("bulk string length mismatch: %v != %v", l, len(str))
@@ -184,7 +187,7 @@ func (h *Handler) read() ([]string, error) {
 func (h *Handler) shouldRead(cmd string) ([]string, error) {
 	msg, err := h.read()
 	if err != nil {
-		return nil, fmt.Errorf("h.read failed: %v", err)
+		return nil, fmt.Errorf("h.read failed: %w", err)
 	}
 
 	if !strings.EqualFold(cmd, msg[0]) {
@@ -197,7 +200,7 @@ func (h *Handler) shouldRead(cmd string) ([]string, error) {
 func (h *Handler) shouldReadPrefix(cmd string) ([]string, error) {
 	msg, err := h.read()
 	if err != nil {
-		return nil, fmt.Errorf("h.read failed: %v", err)
+		return nil, fmt.Errorf("h.read failed: %w", err)
 	}
 
 	prefix := msg[0][:len(cmd)]
@@ -211,7 +214,7 @@ func (h *Handler) shouldReadPrefix(cmd string) ([]string, error) {
 func (h *Handler) shouldReadRDB() error {
 	typ, err := h.conn.Read()
 	if err != nil {
-		return fmt.Errorf("h.conn.Read: %v", err)
+		return fmt.Errorf("h.conn.Read: %w", err)
 	}
 
 	if typ[0] != '$' {
@@ -220,7 +223,7 @@ func (h *Handler) shouldReadRDB() error {
 
 	total, err := strconv.Atoi(typ[1:])
 	if err != nil {
-		return fmt.Errorf("strconf.Atoi: %v", err)
+		return fmt.Errorf("strconf.Atoi: %w", err)
 	}
 
 	result := make([]byte, 0, total)
@@ -232,7 +235,7 @@ func (h *Handler) shouldReadRDB() error {
 				total = total - rd
 				break
 			} else {
-				return fmt.Errorf("h.conn.ReadBytes: %v", err)
+				return fmt.Errorf("h.conn.ReadBytes: %w", err)
 			}
 		}
 
@@ -394,7 +397,7 @@ func (h *Handler) handleGet(key string) error {
 
 	err := h.conn.Write(ret)
 	if err != nil {
-		return fmt.Errorf("write response failed: %v", err)
+		return fmt.Errorf("write response failed: %w", err)
 	}
 
 	return nil
@@ -409,18 +412,29 @@ func (h *Handler) handleInfo(_ []string) error {
 
 	err := h.conn.Write(ret)
 	if err != nil {
-		return fmt.Errorf("write response failed: %v", err)
+		return fmt.Errorf("write response failed: %w", err)
 	}
 
 	return nil
 }
 
-func (h *Handler) handleReplConf(_ []string) error {
+func (h *Handler) handleReplConf(request []string) error {
+	if h.opts.Role != "master" {
+		if !strings.EqualFold(request[1], "GETACK") {
+			return fmt.Errorf("cannot handle command: %v", request)
+		}
+
+		err := h.conn.Write("*3\r\n$8\r\nREPLCONF\r\n$3\r\nACK\r\n$1\r\n0\r\n")
+		if err != nil {
+			return fmt.Errorf("h.conn.Write failed: %w", err)
+		}
+	}
+
 	ret := "+OK\r\n"
 
 	err := h.conn.Write(ret)
 	if err != nil {
-		return fmt.Errorf("write response failed: %v", err)
+		return fmt.Errorf("write response failed: %w", err)
 	}
 
 	return nil
@@ -436,22 +450,22 @@ func (h *Handler) handlePsync(id string, offset int) error {
 		return fmt.Errorf("wrong rsync request: id: %s, offset: %d", id, offset)
 	}
 
-	if offset <= -1 { // FULLRESYNC
+	if offset <= 0 { // FULLRESYNC
 		ret := fmt.Sprintf("+FULLRESYNC %s 0\r\n", h.opts.ReplicationID)
 		if err := h.conn.Write(ret); err != nil {
-			return fmt.Errorf("write response failed: %v", err)
+			return fmt.Errorf("write response failed: %w", err)
 		}
 
 		rdb, err := h.readRDB()
 		if err != nil {
-			return fmt.Errorf("readRDB failed: %v", err)
+			return fmt.Errorf("readRDB failed: %w", err)
 		}
 
 		ret = fmt.Sprintf("$%d\r\n%v", len(rdb), rdb)
 
 		// send content of the RDB file.
 		if err := h.conn.Write(ret); err != nil {
-			return fmt.Errorf("write response failed: %v", err)
+			return fmt.Errorf("write response failed: %w", err)
 		}
 	} else {
 		return fmt.Errorf("not implemented")
@@ -468,7 +482,7 @@ func (h *Handler) readRDB() (string, error) {
 
 	decoded, err := base64.StdEncoding.DecodeString(b64)
 	if err != nil {
-		return "", fmt.Errorf("base64.StdEncoding.DecodeString: %v", err)
+		return "", fmt.Errorf("base64.StdEncoding.DecodeString: %w", err)
 	}
 
 	return string(decoded), nil
