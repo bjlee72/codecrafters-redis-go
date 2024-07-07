@@ -39,6 +39,7 @@ func (c *Connection) Offset() uint64 {
 // The second return value is the total number of bytes read from the connection.
 func (c *Connection) Read() (ret string, _ error) {
 	defer func() {
+		// c.offset is about how much we read from this connection. '2' is for \r\n.
 		c.offset += uint64(len(ret) + 2)
 	}()
 
@@ -69,7 +70,6 @@ func (c *Connection) ReadBytes(buf []byte) (r int, _ error) {
 	return r, nil
 }
 
-// WriteBytes is a low-level write operation on the connection.
 func (c *Connection) WriteBytes(bytes []byte) error {
 	var written int
 	for written < len(bytes) {
@@ -82,7 +82,10 @@ func (c *Connection) WriteBytes(bytes []byte) error {
 	return nil
 }
 
-// Write is a low-level write operation on the connection
-func (c *Connection) Write(str string) error {
+func (c *Connection) WriteString(str string) error {
 	return c.WriteBytes([]byte(str))
+}
+
+func (c *Connection) Write(msg Message) error {
+	return c.WriteString(msg.Redis())
 }

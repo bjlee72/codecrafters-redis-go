@@ -60,36 +60,38 @@ func (h *Handler) Handle() error {
 
 	if !h.server && h.opts.Role == "slave" {
 		// I'm connecting master as slave. NOTE: slave can be a server as well (for example, for INFO command)
-		if err := h.conn.Write("*1\r\n$4\r\nPING\r\n"); err != nil {
+		if err := h.conn.Write(PING); err != nil {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
-		if _, err := h.shouldReadCommand("PONG"); err != nil {
+		if _, err := h.shouldReadReply("PONG"); err != nil {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
-		portStr := strconv.Itoa(h.opts.Port)
-		if err := h.conn.Write(fmt.Sprintf("*3\r\n$8\r\nREPLCONF\r\n$14\r\nlistening-port\r\n$%d\r\n%s\r\n", len(portStr), portStr)); err != nil {
+		replConf1 := NewArray([]string{"REPLCONF", "listening-port", fmt.Sprintf("%d", h.opts.Port)})
+		if err := h.conn.Write(replConf1); err != nil {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
-		if _, err := h.shouldReadCommand("OK"); err != nil {
+		if _, err := h.shouldReadReply("OK"); err != nil {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
-		if err := h.conn.Write("*3\r\n$8\r\nREPLCONF\r\n$4\r\ncapa\r\n$6\r\npsync2\r\n"); err != nil {
+		replConf2 := NewArray([]string{"REPLCONF", "capa", "psync2"})
+		if err := h.conn.Write(replConf2); err != nil {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
-		if _, err := h.shouldReadCommand("OK"); err != nil {
+		if _, err := h.shouldReadReply("OK"); err != nil {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
-		if err := h.conn.Write("*3\r\n$5\r\nPSYNC\r\n$1\r\n?\r\n$2\r\n-1\r\n"); err != nil {
+		psync := NewArray([]string{"PSYNC", "?", "-1"})
+		if err := h.conn.Write(psync); err != nil {
 			return fmt.Errorf("conn.Write failed: %w", err)
 		}
 
-		if _, err := h.shouldReadCommandPrefix("FULLRESYNC"); err != nil {
+		if _, err := h.shouldReadReply("FULLRESYNC"); err != nil {
 			return fmt.Errorf("shouldReadPrefix failed: %w", err)
 		}
 
@@ -117,7 +119,7 @@ func (h *Handler) Handle() error {
 		}
 
 		if h.opts.Role == "master" {
-			if err := h.propagate(NewArray(request)); err != nil {
+			if err := h.propagate(request); err != nil {
 				err = fmt.Errorf("h.propagate failed: %w", err)
 				fmt.Fprintln(os.Stderr, err.Error())
 				return err
@@ -126,20 +128,16 @@ func (h *Handler) Handle() error {
 	}
 }
 
-var propagateCommand = map[string]bool{
-	"SET": true,
-}
-
-func (h *Handler) propagate(msg *Message) error {
-	if !msg.EligibleForPropagation() {
+func (h *Handler) propagate(msg Message) error {
+	if !msg.Propagatible() {
 		return nil
 	}
 
-	h.mc.propagationOffset += uint64(len(msg.ToR2()))
+	h.mc.propagationOffset += uint64(len(msg.Redis()))
 
 	errors := make([]string, 0)
 	for _, s := range h.mc.slaves {
-		if err := s.conn.Write(msg.ToR2()); err != nil {
+		if err := s.conn.Write(msg); err != nil {
 			errors = append(errors, fmt.Sprintf("conn.Write: %v", err))
 		}
 	}
@@ -152,14 +150,14 @@ func (h *Handler) propagate(msg *Message) error {
 }
 
 // read is a basic request-reading routine. Assumes the request is always an array.
-func (h *Handler) read() ([]string, error) {
+func (h *Handler) read() (Message, error) {
 	token, err := h.conn.Read()
 	if err != nil {
 		return nil, fmt.Errorf("conn.Read(): %w", err)
 	}
 
 	if token[0] == '+' { // simple string
-		return []string{token[1:]}, nil
+		return NewSimple(token[1:]), nil
 	}
 
 	num, err := ArrayLength(token)
@@ -190,31 +188,30 @@ func (h *Handler) read() ([]string, error) {
 		requestArray = append(requestArray, str)
 	}
 
-	return requestArray, nil
+	return NewArray(requestArray), nil
 }
 
-func (h *Handler) shouldReadCommand(cmd string) ([]string, error) {
+func (h *Handler) shouldReadReply(prefix string) (Message, error) {
 	msg, err := h.read()
 	if err != nil {
 		return nil, fmt.Errorf("h.read failed: %w", err)
 	}
 
-	if !CommandEquals(cmd, msg[0]) {
-		return nil, fmt.Errorf("cmd mismatch: expected: %s actual: %v", cmd, msg)
+	var reply string
+	switch v := msg.(type) {
+	case *ArrayMessage:
+		reply = v.Cmd()
+	case *SimpleMessage:
+		reply = v.Raw()
+	case *BulkMessage:
+		reply = v.Raw()
+	default:
+		// cannot understood.
+		return nil, fmt.Errorf("cannot process reply: %v", msg)
 	}
 
-	return msg, nil
-}
-
-func (h *Handler) shouldReadCommandPrefix(cmd string) ([]string, error) {
-	msg, err := h.read()
-	if err != nil {
-		return nil, fmt.Errorf("h.read failed: %w", err)
-	}
-
-	prefix := msg[0][:len(cmd)]
-	if !CommandEquals(cmd, prefix) {
-		return nil, fmt.Errorf("cmd mismatch: expected: %s actual: %v", cmd, msg)
+	if !strings.HasPrefix(strings.ToUpper(reply), strings.ToUpper(prefix)) {
+		return nil, fmt.Errorf("cmd mismatch: expected: %s actual: %v", prefix, msg)
 	}
 
 	return msg, nil
@@ -269,11 +266,14 @@ func (h *Handler) shouldReadRDB() error {
 }
 
 // the first return arg is a flag for propagation to secondaries.
-func (h *Handler) processRequest(requestArray []string) error {
-	cmd := strings.ToUpper(requestArray[0])
+func (h *Handler) processRequest(request Message) error {
+	msg, ok := request.(*ArrayMessage)
+	if !ok {
+		// TODO: request that cannot be understood by this logic.
+		return fmt.Errorf("cannot understood request: %v", request)
+	}
 
-	switch cmd {
-
+	switch msg.Cmd() {
 	case "PING":
 		if h.server {
 			// We don't handle ping when master sends to slave for keep-alive purpose.
@@ -284,13 +284,13 @@ func (h *Handler) processRequest(requestArray []string) error {
 		}
 
 	case "ECHO":
-		err := h.handleEcho(requestArray[1])
+		err := h.handleEcho(msg.Token(1))
 		if err != nil {
 			return fmt.Errorf("handleEcho: %v", err)
 		}
 
 	case "INFO":
-		err := h.handleInfo(requestArray[1:])
+		err := h.handleInfo()
 		if err != nil {
 			return fmt.Errorf("handleInfo: %v", err)
 		}
@@ -298,9 +298,9 @@ func (h *Handler) processRequest(requestArray []string) error {
 	case "SET":
 		options := map[string][]string{}
 		var err error
-		if len(requestArray) > 3 {
+		if msg.Len() > 3 {
 			options, err = BuildOptions(
-				requestArray[3:],
+				msg.SliceFrom(3),
 				OptionConfig{"EX": 1, "PX": 1, "EXAT": 1, "PXAT": 1, "NX": 0, "XX": 0, "KEEPTTL": 0, "GET": 0},
 			)
 			if err != nil {
@@ -308,20 +308,20 @@ func (h *Handler) processRequest(requestArray []string) error {
 			}
 		}
 
-		key, value := requestArray[1], requestArray[2]
+		key, value := msg.Token(1), msg.Token(2)
 		err = h.handleSet(key, value, options)
 		if err != nil {
 			return fmt.Errorf("handleSet: %v", err)
 		}
 
 	case "GET":
-		err := h.handleGet(requestArray[1])
+		err := h.handleGet(msg.Token(1))
 		if err != nil {
 			return fmt.Errorf("handleGet: %v", err)
 		}
 
 	case "REPLCONF":
-		err := h.handleReplConf(requestArray[1:])
+		err := h.handleReplConf(msg.SliceFrom(1))
 		if err != nil {
 			return fmt.Errorf("handleReplConf: %v", err)
 		}
@@ -334,12 +334,12 @@ func (h *Handler) processRequest(requestArray []string) error {
 		// register a new slave to update continuously.
 		h.mc.AddSlave(h.conn)
 
-		offset, err := strconv.Atoi(requestArray[2])
+		offset, err := strconv.Atoi(msg.Token(2))
 		if err != nil {
 			return fmt.Errorf("strconv.Atoi: %w", err)
 		}
 
-		err = h.handlePsync(requestArray[1], offset)
+		err = h.handlePsync(msg.Token(1), offset)
 		if err != nil {
 			return fmt.Errorf("handlePsync: %w", err)
 		}
@@ -349,12 +349,12 @@ func (h *Handler) processRequest(requestArray []string) error {
 			return fmt.Errorf("role is not master: %s", h.opts.Role)
 		}
 
-		numReplicas, err := strconv.Atoi(requestArray[1])
+		numReplicas, err := strconv.Atoi(msg.Token(1))
 		if err != nil {
 			return fmt.Errorf("strconv.Atoi: %w", err)
 		}
 
-		timeout, err := strconv.Atoi(requestArray[2])
+		timeout, err := strconv.Atoi(msg.Token(2))
 		if err != nil {
 			return fmt.Errorf("strconv.Atoi: %w", err)
 		}
@@ -369,8 +369,7 @@ func (h *Handler) processRequest(requestArray []string) error {
 }
 
 func (h *Handler) handlePing() error {
-	err := h.conn.Write("+PONG\r\n")
-	if err != nil {
+	if err := h.conn.Write(PONG); err != nil {
 		return fmt.Errorf("write response failed: %v", err)
 	}
 
@@ -378,10 +377,9 @@ func (h *Handler) handlePing() error {
 }
 
 func (h *Handler) handleEcho(val string) error {
-	ret := fmt.Sprintf("$%v\r\n%v\r\n", len(val), val)
+	echo := NewBulk(val)
 
-	err := h.conn.Write(ret)
-	if err != nil {
+	if err := h.conn.Write(echo); err != nil {
 		return fmt.Errorf("write response failed: %v", err)
 	}
 
@@ -405,7 +403,7 @@ func (h *Handler) handleSet(key, val string, options map[string][]string) error 
 		return nil
 	}
 
-	err := h.conn.Write("+OK\r\n")
+	err := h.conn.Write(OK)
 	if err != nil {
 		return fmt.Errorf("write response failed: %v", err)
 	}
@@ -414,13 +412,13 @@ func (h *Handler) handleSet(key, val string, options map[string][]string) error 
 }
 
 func (h *Handler) handleGet(key string) error {
-	ret := "$-1\r\n"
+	var cachedValue Message = NULL
 
 	if entry, err := h.cache.Get(key); entry != nil && err == nil {
-		ret = fmt.Sprintf("$%v\r\n%v\r\n", len(*entry), *entry)
+		cachedValue = NewBulk(*entry)
 	}
 
-	err := h.conn.Write(ret)
+	err := h.conn.Write(cachedValue)
 	if err != nil {
 		return fmt.Errorf("write response failed: %w", err)
 	}
@@ -428,14 +426,14 @@ func (h *Handler) handleGet(key string) error {
 	return nil
 }
 
-func (h *Handler) handleInfo(_ []string) error {
+func (h *Handler) handleInfo() error {
 	ret := "$-1\r\n"
 
 	if str, err := h.info.ToRedisBulkString(); err == nil {
 		ret = str
 	}
 
-	err := h.conn.Write(ret)
+	err := h.conn.WriteString(ret)
 	if err != nil {
 		return fmt.Errorf("write response failed: %w", err)
 	}
@@ -452,7 +450,8 @@ func (h *Handler) handleWait(numReplicas, timeout int) error {
 	}
 	if len(toWait) == 0 {
 		// nothing to wait for - return immediately.
-		err := h.conn.Write(NewInt(len(h.mc.slaves)).ToR2())
+		allInSync := NewInt(len(h.mc.slaves))
+		err := h.conn.Write(allInSync)
 		if err != nil {
 			return fmt.Errorf("h.conn.Write failed: %w", err)
 		}
@@ -464,7 +463,8 @@ func (h *Handler) handleWait(numReplicas, timeout int) error {
 
 	getAck := NewArray([]string{"REPLCONF", "GETACK", "*"})
 	for _, c := range toWait {
-		if err := c.Write(getAck.ToR2()); err != nil {
+		// cannot use h.conn.Write here because we should send to slave
+		if err := c.Write(getAck); err != nil {
 			fmt.Fprintf(os.Stderr, "c.Write failed: %v", err)
 			h.mc.wg.Done()
 		}
@@ -481,20 +481,13 @@ func (h *Handler) handleWait(numReplicas, timeout int) error {
 	case <-time.After(time.Millisecond * time.Duration(timeout)):
 	}
 
-	result := 0
-	h.mc.ForEachSlave(func(mc *MasterConfig, s *Slave) {
-		if mc.propagationOffset == s.propagatedOffset {
-			result += 1
-		}
-	})
-
-	err := h.conn.Write(NewInt(result).ToR2())
-	if err != nil {
+	syncedSlaves := NewInt(h.mc.SyncedSlaveNum())
+	if err := h.conn.Write(syncedSlaves); err != nil {
 		return fmt.Errorf("h.conn.Write failed: %w", err)
 	}
 
 	// because we sent getAck command for this
-	h.mc.propagationOffset += uint64(len(getAck.ToR2()))
+	h.mc.propagationOffset += uint64(len(getAck.Redis()))
 
 	return nil
 }
@@ -506,30 +499,24 @@ func (h *Handler) handleReplConf(request []string) error {
 		r := strconv.FormatUint(transferred, 10)
 
 		// send response to master.
-		if err := h.conn.Write(NewArray([]string{"REPLCONF", "ACK", r}).ToR2()); err != nil {
+		if err := h.conn.Write(NewArray([]string{"REPLCONF", "ACK", r})); err != nil {
 			return fmt.Errorf("h.conn.Write failed: %w", err)
 		}
 
 		return nil
+
 	} else if h.opts.Role == "master" && CommandEquals(request[0], "ACK") {
-		acked, err := strconv.ParseUint(request[1], 10, 64)
+		offset, err := strconv.ParseUint(request[1], 10, 64)
 		if err != nil {
 			return fmt.Errorf("strconf.ParseInt failed: %w", err)
 		}
 
-		h.mc.ForSlave(h.conn, func(mc *MasterConfig, s *Slave) {
-			s.propagatedOffset = acked
-			if s.propagatedOffset == mc.propagationOffset {
-				mc.wg.Done()
-			}
-		})
+		h.mc.AckSlave(h.conn, offset)
 
 		return nil
 	}
 
-	ret := "+OK\r\n"
-
-	err := h.conn.Write(ret)
+	err := h.conn.Write(OK)
 	if err != nil {
 		return fmt.Errorf("write response failed: %w", err)
 	}
@@ -549,7 +536,7 @@ func (h *Handler) handlePsync(id string, offset int) error {
 
 	if offset <= 0 { // FULLRESYNC
 		ret := fmt.Sprintf("+FULLRESYNC %s 0\r\n", h.opts.ReplicationID)
-		if err := h.conn.Write(ret); err != nil {
+		if err := h.conn.WriteString(ret); err != nil {
 			return fmt.Errorf("write response failed: %w", err)
 		}
 
@@ -561,7 +548,7 @@ func (h *Handler) handlePsync(id string, offset int) error {
 		ret = fmt.Sprintf("$%d\r\n%v", len(rdb), rdb)
 
 		// send content of the RDB file.
-		if err := h.conn.Write(ret); err != nil {
+		if err := h.conn.WriteString(ret); err != nil {
 			return fmt.Errorf("write response failed: %w", err)
 		}
 	} else {

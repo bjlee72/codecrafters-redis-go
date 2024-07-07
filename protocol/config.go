@@ -21,39 +21,41 @@ func NewMasterConfig() *MasterConfig {
 	}
 }
 
-type SlaveCallback func(mc *MasterConfig, s *Slave)
-
-func (mc *MasterConfig) ForEachSlave(f SlaveCallback) {
+func (mc *MasterConfig) SyncedSlaveNum() int {
 	mc.slavesLock.RLock()
-	{
-		for _, s := range mc.slaves {
-			f(mc, s)
+	defer mc.slavesLock.RUnlock()
+
+	var result int
+	for _, s := range mc.slaves {
+		if mc.propagationOffset == s.propagatedOffset {
+			result += 1
 		}
 	}
-	mc.slavesLock.RUnlock()
+
+	return result
 }
 
-func (mc *MasterConfig) ForSlave(conn *Connection, f SlaveCallback) {
+func (mc *MasterConfig) AckSlave(conn *Connection, offset uint64) {
 	mc.slavesLock.Lock()
-	{
-		remoteAddr := conn.conn.RemoteAddr().String()
-		s, ok := mc.slaves[remoteAddr]
-		if !ok {
-			log.Fatal("cannot find the right slave: ", remoteAddr)
-		}
-		f(mc, s)
+	defer mc.slavesLock.Unlock()
+
+	remoteAddr := conn.conn.RemoteAddr().String()
+	s, ok := mc.slaves[remoteAddr]
+	if !ok {
+		log.Fatal("cannot find the right slave: ", remoteAddr)
 	}
-	mc.slavesLock.Unlock()
+
+	s.propagatedOffset = offset
+	if s.propagatedOffset == mc.propagationOffset {
+		mc.wg.Done()
+	}
 }
 
 func (mc *MasterConfig) AddSlave(conn *Connection) {
-	remoteAddr := conn.RemoteAddr().String()
-	s := NewSlave(conn)
 	mc.slavesLock.Lock()
-	{
-		mc.slaves[remoteAddr] = s
-	}
-	mc.slavesLock.Unlock()
+	defer mc.slavesLock.Unlock()
+
+	mc.slaves[conn.RemoteAddr().String()] = NewSlave(conn)
 }
 
 type Slave struct {
