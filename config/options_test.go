@@ -10,7 +10,7 @@ import (
 
 func TestOpts_Master_Validate(t *testing.T) {
 	var o Opts
-	err := o.Validate()
+	err := o.Evaluate()
 	require.NoError(t, err)
 
 	assert.Equal(t, o.Role, "master")
@@ -53,7 +53,7 @@ func TestOpts_ReplicaOf_Validate(t *testing.T) {
 				MasterIP:   tt.fields.MasterIP,
 				MasterPort: tt.fields.MasterPort,
 			}
-			err := o.Validate()
+			err := o.Evaluate()
 			if err != nil && !tt.wantErr {
 				t.Errorf("Opts.Validate() error = %v, wantErr %v", err, tt.wantErr)
 			} else if err == nil {

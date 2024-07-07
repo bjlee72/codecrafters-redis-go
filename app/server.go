@@ -21,7 +21,7 @@ func main() {
 		panic(err)
 	}
 
-	err = opts.Validate()
+	err = opts.Evaluate()
 	if err != nil {
 		fmt.Println(err.Error())
 		os.Exit(1)

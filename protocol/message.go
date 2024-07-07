@@ -5,16 +5,6 @@ import (
 	"strings"
 )
 
-type MessageType int
-
-const (
-	Null MessageType = iota
-	Array
-	Simple
-	Int
-	Bulk
-)
-
 var (
 	/*
 	 * 	Pre-defined messages.
@@ -41,7 +31,6 @@ var propagatible = map[string]bool{
 type ArrayMessage struct {
 	msg          string
 	raw          []string
-	typ          MessageType
 	propagatible bool
 }
 
@@ -56,7 +45,6 @@ func NewArray(tokens []string) *ArrayMessage {
 	return &ArrayMessage{
 		msg:          result,
 		raw:          tokens,
-		typ:          Array,
 		propagatible: propagatible[strings.ToUpper(tokens[0])],
 	}
 }
@@ -89,14 +77,12 @@ func (am *ArrayMessage) Propagatible() bool {
 type IntMessage struct {
 	msg string
 	raw int
-	typ MessageType
 }
 
 func NewInt(val int) *IntMessage {
 	return &IntMessage{
 		msg: fmt.Sprintf(":%d\r\n", val),
 		raw: val,
-		typ: Int,
 	}
 }
 
@@ -115,14 +101,12 @@ func (im *IntMessage) Propagatible() bool {
 type SimpleMessage struct {
 	msg string
 	raw string
-	typ MessageType
 }
 
 func NewSimple(str string) *SimpleMessage {
 	return &SimpleMessage{
 		msg: fmt.Sprintf("+%s\r\n", str),
 		raw: str,
-		typ: Simple,
 	}
 }
 
@@ -141,14 +125,12 @@ func (sm *SimpleMessage) Propagatible() bool {
 type BulkMessage struct {
 	msg string
 	raw string
-	typ MessageType
 }
 
 func NewBulk(str string) *BulkMessage {
 	return &BulkMessage{
 		msg: fmt.Sprintf("$%d\r\n%s\r\n", len(str), str),
 		raw: str,
-		typ: Bulk,
 	}
 }
 
@@ -164,14 +146,10 @@ func (bm *BulkMessage) Propagatible() bool {
 	return false
 }
 
-type NullMessage struct {
-	typ MessageType
-}
+type NullMessage struct{}
 
 func NewNull() *NullMessage {
-	return &NullMessage{
-		typ: Null,
-	}
+	return &NullMessage{}
 }
 
 func (nm *NullMessage) Redis() string {

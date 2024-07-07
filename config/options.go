@@ -31,8 +31,8 @@ type Opts struct {
 	ReplicationOffset int
 }
 
-func (o *Opts) Validate() error {
-
+// Evaluate processes the given parameters, validates them, and populates induced read-only options.
+func (o *Opts) Evaluate() error {
 	//
 	// Validate ReplicatOf
 	//
@@ -61,10 +61,10 @@ func (o *Opts) Validate() error {
 		if err != nil {
 			return fmt.Errorf("not the valid port number: %v", err)
 		}
+
 		o.MasterPort = port
 		o.Role = "slave"
-
-		o.ReplicationID = ""
+		o.ReplicationID = "" // I am slave. I don't have a replicaton ID.
 	}
 	return nil
 }
