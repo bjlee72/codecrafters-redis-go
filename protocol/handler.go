@@ -425,13 +425,9 @@ func (h *Handler) handleGet(key string) error {
 }
 
 func (h *Handler) handleInfo() error {
-	ret := "$-1\r\n"
+	info := NewBulk(strings.Join(h.info.Info(), "\r\n"))
 
-	if str, err := h.info.ToRedisBulkString(); err == nil {
-		ret = str
-	}
-
-	err := h.conn.WriteString(ret)
+	err := h.conn.Write(info)
 	if err != nil {
 		return fmt.Errorf("write response failed: %w", err)
 	}
@@ -523,8 +519,8 @@ func (h *Handler) handlePsync(id string, offset int) error {
 	}
 
 	if offset <= 0 { // FULLRESYNC
-		ret := fmt.Sprintf("+FULLRESYNC %s 0\r\n", h.opts.ReplicationID)
-		if err := h.conn.WriteString(ret); err != nil {
+		fullResync := NewSimple(fmt.Sprintf("FULLRESYNC %s 0", h.opts.ReplicationID))
+		if err := h.conn.Write(fullResync); err != nil {
 			return fmt.Errorf("write response failed: %w", err)
 		}
 
@@ -533,10 +529,9 @@ func (h *Handler) handlePsync(id string, offset int) error {
 			return fmt.Errorf("readRDB failed: %w", err)
 		}
 
-		ret = fmt.Sprintf("$%d\r\n%v", len(rdb), rdb)
-
-		// send content of the RDB file.
-		if err := h.conn.WriteString(ret); err != nil {
+		// RDB has a weird ending rule (not ends with \r\n), so we don't usage h.conn.Write here.
+		rdb = fmt.Sprintf("$%d\r\n%v", len(rdb), rdb)
+		if err := h.conn.WriteString(rdb); err != nil {
 			return fmt.Errorf("write response failed: %w", err)
 		}
 	} else {
