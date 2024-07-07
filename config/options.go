@@ -17,8 +17,10 @@ var (
 
 // Opts represets the config given by users.
 type Opts struct {
-	Port      int    `short:"p" long:"port" default:"6379" description:"port number to bind this server"`
-	ReplicaOf string `long:"replicaof" description:"<master host> <master port>"`
+	Port       int    `short:"p" long:"port" default:"6379" description:"port number to bind this server"`
+	ReplicaOf  string `long:"replicaof" description:"<master host> <master port>"`
+	Dir        string `long:"dir" description:"the path to the directory where the RDB file is stored (example: /tmp/redis-data)"`
+	DbFilename string `long:"dbfilename" description:"the name of the RDB file (example: rdbfile)"`
 
 	// The below are the read-only opts induced by the user-given config values.
 

@@ -272,6 +272,12 @@ func (h *Handler) processRequest(request Message) error {
 	}
 
 	switch msg.Raw()[0] {
+	case "CONFIG":
+		err := h.handleConfig(msg.Token(1), msg.Token(2))
+		if err != nil {
+			return fmt.Errorf("handleConfig: %v", err)
+		}
+
 	case "PING":
 		if h.server {
 			// We don't handle ping when master sends to slave for keep-alive purpose.
@@ -364,6 +370,21 @@ func (h *Handler) processRequest(request Message) error {
 	}
 
 	return nil
+}
+
+func (h *Handler) handleConfig(cmd, param string) error {
+	if strings.EqualFold(cmd, "GET") {
+		if strings.EqualFold(param, "dir") {
+			if err := h.conn.Write(NewArray([]string{"dir", h.opts.Dir})); err != nil {
+				return fmt.Errorf("h.conn.Write failed: %w", err)
+			}
+		} else if strings.EqualFold(param, "dir") {
+			if err := h.conn.Write(NewArray([]string{"dbfilename", h.opts.DbFilename})); err != nil {
+				return fmt.Errorf("h.conn.Write failed: %w", err)
+			}
+		}
+	}
+	return fmt.Errorf("cannot process the cmd: %s %s", cmd, param)
 }
 
 func (h *Handler) handlePing() error {
