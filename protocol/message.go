@@ -61,10 +61,6 @@ func NewArray(tokens []string) *ArrayMessage {
 	}
 }
 
-func (am *ArrayMessage) Cmd() string {
-	return am.raw[0]
-}
-
 func (sm *ArrayMessage) Raw() []string {
 	return sm.raw
 }

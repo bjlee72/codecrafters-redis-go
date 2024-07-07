@@ -7,8 +7,6 @@ import (
 	"os"
 	"strconv"
 	"strings"
-	"sync"
-	"time"
 
 	"github.com/codecrafters-io/redis-starter-go/config"
 	"github.com/codecrafters-io/redis-starter-go/info"
@@ -200,7 +198,7 @@ func (h *Handler) shouldReadReply(prefix string) (Message, error) {
 	var reply string
 	switch v := msg.(type) {
 	case *ArrayMessage:
-		reply = v.Cmd()
+		reply = v.Raw()[0]
 	case *SimpleMessage:
 		reply = v.Raw()
 	case *BulkMessage:
@@ -270,10 +268,10 @@ func (h *Handler) processRequest(request Message) error {
 	msg, ok := request.(*ArrayMessage)
 	if !ok {
 		// TODO: request that cannot be understood by this logic.
-		return fmt.Errorf("cannot understood request: %v", request)
+		return fmt.Errorf("couldn't understand request: %v", request)
 	}
 
-	switch msg.Cmd() {
+	switch msg.Raw()[0] {
 	case "PING":
 		if h.server {
 			// We don't handle ping when master sends to slave for keep-alive purpose.
@@ -458,28 +456,18 @@ func (h *Handler) handleWait(numReplicas, timeout int) error {
 		return nil
 	}
 
-	h.mc.wg = &sync.WaitGroup{}
-	h.mc.wg.Add(min(len(toWait), numReplicas))
+	slaveAckWG := h.mc.NewSlaveAckWG(min(len(toWait), numReplicas))
 
 	getAck := NewArray([]string{"REPLCONF", "GETACK", "*"})
 	for _, c := range toWait {
 		// cannot use h.conn.Write here because we should send to slave
 		if err := c.Write(getAck); err != nil {
 			fmt.Fprintf(os.Stderr, "c.Write failed: %v", err)
-			h.mc.wg.Done()
+			slaveAckWG.Done()
 		}
 	}
 
-	c := make(chan struct{})
-	go func() {
-		defer close(c)
-		h.mc.wg.Wait()
-	}()
-
-	select {
-	case <-c:
-	case <-time.After(time.Millisecond * time.Duration(timeout)):
-	}
+	slaveAckWG.TimedWait(timeout)
 
 	syncedSlaves := NewInt(h.mc.SyncedSlaveNum())
 	if err := h.conn.Write(syncedSlaves); err != nil {
