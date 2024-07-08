@@ -51,7 +51,7 @@ func (mc *MasterConfig) ForEachSlave(f func(mc *MasterConfig, s *Slave)) {
 	}
 }
 
-func (mc *MasterConfig) PropagationAckedBy(amount int) {
+func (mc *MasterConfig) AdvancePropagation(amount int) {
 	mc.propagationOffset += uint64(amount)
 }
 

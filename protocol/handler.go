@@ -131,7 +131,7 @@ func (h *Handler) propagate(msg Message) error {
 		return nil
 	}
 
-	h.mc.PropagationAckedBy(len(msg.Redis()))
+	h.mc.AdvancePropagation(len(msg.Redis()))
 
 	errors := make([]string, 0)
 	h.mc.ForEachSlave(func(mc *MasterConfig, s *Slave) {
