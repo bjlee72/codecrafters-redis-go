@@ -45,6 +45,16 @@ func NewMasterConfig() *MasterConfig {
 	}
 }
 
+func (mc *MasterConfig) ForEachSlave(f func(mc *MasterConfig, s *Slave)) {
+	for _, s := range mc.slaves {
+		f(mc, s)
+	}
+}
+
+func (mc *MasterConfig) PropagationAckedBy(amount int) {
+	mc.propagationOffset += uint64(amount)
+}
+
 func (mc *MasterConfig) NewSlaveAckWG(howmany int) *SlaveAckWG {
 	mc.slaveAckWG.wg = &sync.WaitGroup{}
 	mc.slaveAckWG.wg.Add(howmany)

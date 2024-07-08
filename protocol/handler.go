@@ -131,14 +131,14 @@ func (h *Handler) propagate(msg Message) error {
 		return nil
 	}
 
-	h.mc.propagationOffset += uint64(len(msg.Redis()))
+	h.mc.PropagationAckedBy(len(msg.Redis()))
 
 	errors := make([]string, 0)
-	for _, s := range h.mc.slaves {
+	h.mc.ForEachSlave(func(mc *MasterConfig, s *Slave) {
 		if err := s.conn.Write(msg); err != nil {
 			errors = append(errors, fmt.Sprintf("conn.Write: %v", err))
 		}
-	}
+	})
 
 	if len(errors) > 0 {
 		return fmt.Errorf("propagate failed: [%s]", strings.Join(errors, ", "))
