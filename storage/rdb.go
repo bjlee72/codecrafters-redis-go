@@ -77,7 +77,6 @@ func ReadRDBToCache(dir, filename string, cache *Cache) error {
 			}
 
 			for i := 0; i < int(dbLength); i++ {
-
 				dbopcode := make([]byte, 1)
 				if err := read(f, dbopcode); err != nil {
 					return fmt.Errorf("couldn't read db opcode: %w", err)
@@ -93,7 +92,9 @@ func ReadRDBToCache(dir, filename string, cache *Cache) error {
 						return fmt.Errorf("couldn't read 8 byte length: %w", err)
 					}
 
-					expiration = binary.BigEndian.Uint64(length)
+					expiration = binary.LittleEndian.Uint64(length)
+
+					fmt.Println("expiration = ", expiration)
 
 					if err := read(f, valueType); err != nil {
 						return fmt.Errorf("couldn't read value type: %w", err)
@@ -105,7 +106,9 @@ func ReadRDBToCache(dir, filename string, cache *Cache) error {
 						return fmt.Errorf("couldn't read 4 byte length: %w", err)
 					}
 
-					expiration = binary.BigEndian.Uint64(length) * 1000 // second to millis
+					expiration = binary.LittleEndian.Uint64(length) * 1000 // second to millis
+
+					fmt.Println("expiration = ", expiration)
 
 					if err := read(f, valueType); err != nil {
 						return fmt.Errorf("couldn't read value type: %w", err)
@@ -119,7 +122,7 @@ func ReadRDBToCache(dir, filename string, cache *Cache) error {
 					return fmt.Errorf("couldn't read key and value: %w", err)
 				}
 
-				if uint64(time.Now().UnixMilli()) > expiration {
+				if expiration != 0 && uint64(time.Now().UnixMilli()) >= expiration {
 					continue
 				}
 
@@ -215,7 +218,7 @@ func readChecksum(f *os.File) (uint64, error) {
 		return 0, fmt.Errorf("couldn't read checksum: %w", err)
 	}
 
-	return binary.BigEndian.Uint64(checksum), nil
+	return binary.LittleEndian.Uint64(checksum), nil
 }
 
 // readEncodedLength returns the encoded length. If further processing is needed,
@@ -241,7 +244,7 @@ func readEncodedLength(f *os.File) (uint64, bool, error) {
 		if err := read(f, length); err != nil {
 			return 0, false, fmt.Errorf("couldn't read the second byte of length encoded int: %w", err)
 		}
-		return binary.BigEndian.Uint64(length), false, nil
+		return binary.LittleEndian.Uint64(length), false, nil
 	case 3: // The most significant 2 bits: 11 - The remaining 6 bits determines the format. Maybe used to store numbers or strings.
 		return uint64(0x3f & first[0]), true /* further processing needed */, nil
 	}
