@@ -27,6 +27,11 @@ func main() {
 		os.Exit(1)
 	}
 
+	if opts.Dir != "" && opts.DbFilename != "" {
+		// TODO: At this point, we don't care about the file read failure.
+		storage.ReadRDBToCache(opts.Dir, opts.DbFilename, storage.GetCache())
+	}
+
 	if opts.Role != "master" {
 		go connectMaster(opts)
 	}

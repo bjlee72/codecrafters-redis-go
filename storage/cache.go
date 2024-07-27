@@ -29,6 +29,10 @@ func NewCache() *Cache {
 	}
 }
 
+func (c *Cache) Reset() {
+	c.entries = make(map[string]*entry)
+}
+
 func (c *Cache) Set(key, value string, expireAfter int64) error {
 	e := &entry{
 		value:    &value,
@@ -56,4 +60,12 @@ func (c *Cache) Get(key string) (*string, error) {
 	delete(c.entries, key)
 
 	return nil, nil
+}
+
+func (c *Cache) Keys() ([]string, error) {
+	result := make([]string, 0, len(c.entries))
+	for k := range c.entries {
+		result = append(result, k)
+	}
+	return result, nil
 }

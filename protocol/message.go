@@ -36,6 +36,14 @@ type ArrayMessage struct {
 
 // NewArray returns an message, which is an array of bulk strings.
 func NewArray(tokens []string) *ArrayMessage {
+	if len(tokens) == 0 {
+		return &ArrayMessage{
+			msg:          "*0\r\n",
+			raw:          []string{},
+			propagatible: false,
+		}
+	}
+
 	bulks := make([]string, 0, len(tokens))
 	for _, blk := range tokens {
 		bulks = append(bulks, fmt.Sprintf("$%d\r\n%s", len(blk), blk))

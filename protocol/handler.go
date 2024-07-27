@@ -1,7 +1,6 @@
 package protocol
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
 	"os"
@@ -367,6 +366,12 @@ func (h *Handler) processRequest(request Message) error {
 		if err != nil {
 			return fmt.Errorf("h.handleWait failed: %w", err)
 		}
+
+	case "KEYS":
+		err := h.handleKeys(msg.SliceFrom(1))
+		if err != nil {
+			return fmt.Errorf("h.handleKeys failed: %w", err)
+		}
 	}
 
 	return nil
@@ -545,6 +550,7 @@ func (h *Handler) handlePsync(id string, offset int) error {
 			return fmt.Errorf("write response failed: %w", err)
 		}
 
+		// We need to read RDB file and send it.
 		rdb, err := h.readRDB()
 		if err != nil {
 			return fmt.Errorf("readRDB failed: %w", err)
@@ -563,16 +569,23 @@ func (h *Handler) handlePsync(id string, offset int) error {
 	return nil
 }
 
-// readRDB returns the base64-decoded RDB file.
-func (h *Handler) readRDB() (string, error) {
-	var (
-		b64 = `UkVESVMwMDEx+glyZWRpcy12ZXIFNy4yLjD6CnJlZGlzLWJpdHPAQPoFY3RpbWXCbQi8ZfoIdXNlZC1tZW3CsMQQAPoIYW9mLWJhc2XAAP/wbjv+wP9aog==`
-	)
-
-	decoded, err := base64.StdEncoding.DecodeString(b64)
+func (h *Handler) handleKeys(_ []string) error {
+	// TODO: we just greb all keys and send back to the client
+	keys, err := h.cache.Keys()
 	if err != nil {
-		return "", fmt.Errorf("base64.StdEncoding.DecodeString: %w", err)
+		return fmt.Errorf("couldn't retrieve keys from cache: %w", err)
 	}
 
-	return string(decoded), nil
+	if err := h.conn.Write(NewArray(keys)); err != nil {
+		return fmt.Errorf("couldn't write keys: %w", err)
+	}
+
+	return nil
+}
+
+// readRDB returns the base64-decoded RDB file.
+func (h *Handler) readRDB() (string, error) {
+	// TODO:
+
+	return storage.EmptyRDBString()
 }
