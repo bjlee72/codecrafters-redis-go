@@ -47,6 +47,14 @@ func (c *Cache) Set(key, value string, expireAfter int64) error {
 	return nil
 }
 
+func (c *Cache) SetExpireAt(key, value string, expireAt int64) error {
+	c.entries[key] = &entry{
+		value:    &value,
+		expireAt: expireAt,
+	}
+	return nil
+}
+
 func (c *Cache) Get(key string) (*string, error) {
 	e, ok := c.entries[key]
 	if !ok {

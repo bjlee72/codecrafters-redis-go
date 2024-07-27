@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"time"
 
 	lzf "github.com/zhuyie/golzf"
 )
@@ -118,7 +119,11 @@ func ReadRDBToCache(dir, filename string, cache *Cache) error {
 					return fmt.Errorf("couldn't read key and value: %w", err)
 				}
 
-				cache.Set(key, value, int64(expiration))
+				if uint64(time.Now().UnixMilli()) > expiration {
+					continue
+				}
+
+				cache.SetExpireAt(key, value, int64(expiration))
 			}
 
 		case 0xFE: // SELECT DB
