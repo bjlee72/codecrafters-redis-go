@@ -492,7 +492,7 @@ func (h *Handler) handleWait(numReplicas, timeout int) error {
 	}
 
 	// because we sent getAck command for this
-	h.mc.propagationOffset += uint64(len(getAck.Redis()))
+	h.mc.AdvancePropagation(len(getAck.Redis()))
 
 	return nil
 }

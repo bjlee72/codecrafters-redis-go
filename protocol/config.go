@@ -7,11 +7,25 @@ import (
 )
 
 type SlaveAckWG struct {
-	wg *sync.WaitGroup
+	cnt int
+	wg  *sync.WaitGroup
 }
 
-func (saw *SlaveAckWG) Done() {
+func NewSlaveAckWG(howmany int) *SlaveAckWG {
+	wg := &sync.WaitGroup{}
+	wg.Add(howmany)
+
+	return &SlaveAckWG{
+		cnt: howmany,
+		wg:  wg,
+	}
+}
+
+func (saw *SlaveAckWG) Done() bool {
 	saw.wg.Done()
+	saw.cnt--
+
+	return saw.cnt == 0
 }
 
 func (saw *SlaveAckWG) TimedWait(timeoutMillis int) {
@@ -32,16 +46,13 @@ type MasterConfig struct {
 	slaves            map[string]*Slave
 	slavesLock        sync.RWMutex
 	propagationOffset uint64 // the offset that we expect to be acknowledged by the next REPLCONF ACK ?? response.
-	slaveAckWG        *SlaveAckWG
+	slaveAckWGs       []*SlaveAckWG
 }
 
 func NewMasterConfig() *MasterConfig {
 	return &MasterConfig{
 		slaves:     make(map[string]*Slave, 0),
 		slavesLock: sync.RWMutex{},
-		slaveAckWG: &SlaveAckWG{
-			wg: &sync.WaitGroup{},
-		},
 	}
 }
 
@@ -56,10 +67,13 @@ func (mc *MasterConfig) AdvancePropagation(amount int) {
 }
 
 func (mc *MasterConfig) NewSlaveAckWG(howmany int) *SlaveAckWG {
-	mc.slaveAckWG.wg = &sync.WaitGroup{}
-	mc.slaveAckWG.wg.Add(howmany)
+	mc.slavesLock.Lock()
+	defer mc.slavesLock.Unlock()
 
-	return mc.slaveAckWG
+	new := NewSlaveAckWG(howmany)
+	mc.slaveAckWGs = append(mc.slaveAckWGs, new)
+
+	return new
 }
 
 func (mc *MasterConfig) SyncedSlaveNum() int {
@@ -87,8 +101,10 @@ func (mc *MasterConfig) AckSlave(conn *Connection, offset uint64) {
 	}
 
 	s.propagatedOffset = offset
-	if s.propagatedOffset == mc.propagationOffset {
-		mc.slaveAckWG.Done()
+
+	front := mc.slaveAckWGs[0]
+	if front.Done() {
+		mc.slaveAckWGs = mc.slaveAckWGs[1:]
 	}
 }
 
