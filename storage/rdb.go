@@ -59,7 +59,7 @@ func ReadRDBToCache(dir, filename string, cache *Cache) error {
 		case 0xFB: // RESIZE DB
 			// read length-encoded int for the size of hash table
 			// read length-encoded int for the size of expire hash table
-			_, more, err := readEncodedLength(f)
+			dbLength, more, err := readEncodedLength(f)
 			if err != nil {
 				return fmt.Errorf("couldn't read hash table size: %w", err)
 			}
@@ -75,48 +75,51 @@ func ReadRDBToCache(dir, filename string, cache *Cache) error {
 				return fmt.Errorf("length is encoded in the wrong way")
 			}
 
-			dbopcode := make([]byte, 1)
-			if err := read(f, dbopcode); err != nil {
-				return fmt.Errorf("couldn't read db opcode: %w", err)
+			for i := 0; i < int(dbLength); i++ {
+
+				dbopcode := make([]byte, 1)
+				if err := read(f, dbopcode); err != nil {
+					return fmt.Errorf("couldn't read db opcode: %w", err)
+				}
+
+				valueType := make([]byte, 1)
+				expiration := uint64(0) // default: not expire (0)
+
+				switch dbopcode[0] {
+				case 0xFC: // EXPIRE MILLISECONDS - 8 byte length follows
+					length := make([]byte, 8)
+					if err := read(f, length); err != nil {
+						return fmt.Errorf("couldn't read 8 byte length: %w", err)
+					}
+
+					expiration = binary.BigEndian.Uint64(length)
+
+					if err := read(f, valueType); err != nil {
+						return fmt.Errorf("couldn't read value type: %w", err)
+					}
+
+				case 0xFD: // EXPIRE SECONDS - 4 byte length follows
+					length := make([]byte, 4)
+					if err := read(f, length); err != nil {
+						return fmt.Errorf("couldn't read 4 byte length: %w", err)
+					}
+
+					expiration = binary.BigEndian.Uint64(length) * 1000 // second to millis
+
+					if err := read(f, valueType); err != nil {
+						return fmt.Errorf("couldn't read value type: %w", err)
+					}
+				default:
+					valueType[0] = dbopcode[0]
+				}
+
+				key, value, err := readKeyValue(f, valueType[0])
+				if err != nil {
+					return fmt.Errorf("couldn't read key and value: %w", err)
+				}
+
+				cache.Set(key, value, int64(expiration))
 			}
-
-			valueType := make([]byte, 1)
-			expiration := uint64(0) // default: not expire (0)
-
-			switch dbopcode[0] {
-			case 0xFC: // EXPIRE MILLISECONDS - 8 byte length follows
-				length := make([]byte, 8)
-				if err := read(f, length); err != nil {
-					return fmt.Errorf("couldn't read 8 byte length: %w", err)
-				}
-
-				expiration = binary.BigEndian.Uint64(length)
-
-				if err := read(f, valueType); err != nil {
-					return fmt.Errorf("couldn't read value type: %w", err)
-				}
-
-			case 0xFD: // EXPIRE SECONDS - 4 byte length follows
-				length := make([]byte, 4)
-				if err := read(f, length); err != nil {
-					return fmt.Errorf("couldn't read 4 byte length: %w", err)
-				}
-
-				expiration = binary.BigEndian.Uint64(length) * 1000 // second to millis
-
-				if err := read(f, valueType); err != nil {
-					return fmt.Errorf("couldn't read value type: %w", err)
-				}
-			default:
-				valueType[0] = dbopcode[0]
-			}
-
-			key, value, err := readKeyValue(f, valueType[0])
-			if err != nil {
-				return fmt.Errorf("couldn't read key and value: %w", err)
-			}
-
-			cache.Set(key, value, int64(expiration))
 
 		case 0xFE: // SELECT DB
 			_, err = readDBNumber(f) // we are not using the db number at this moment.
@@ -328,7 +331,7 @@ func readKeyValue(f *os.File, valueType byte) (string, string, error) {
 		return "", "", fmt.Errorf("couldn't read key: %w", err)
 	}
 
-	fmt.Println("key = %s, value = %s", key, value)
+	fmt.Printf("key = %s, value = %s\n", key, value)
 
 	return key, value, nil
 }
